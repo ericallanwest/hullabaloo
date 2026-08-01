@@ -1,0 +1,25 @@
+# secrets
+.env
+
+# pixi
+.pixi/
+
+# data — regenerable from the pipeline, and the DEM tiles are large
+data/raw/**
+data/interim/**
+data/processed/**
+!data/**/.gitkeep
+
+# generated outputs (keep the small ones tracked via -f if desired)
+outputs/*.tif
+outputs/*.gpkg
+
+# http cache written by py3dep / pynhd
+cache/
+
+# python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+__marimo__/

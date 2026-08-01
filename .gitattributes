@@ -1,0 +1,7 @@
+* text=auto eol=lf
+
+*.png binary
+*.tif binary
+*.gpkg binary
+*.parquet binary
+pixi.lock linguist-generated

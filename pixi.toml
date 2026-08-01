@@ -1,0 +1,74 @@
+[workspace]
+name = "hullabaloo"
+version = "0.1.0"
+description = "Route optimization for the Blacksburg Adventure Skills Hullabaloo 7-hour trail rogaine"
+authors = ["Eric West <ericallanwest@gmail.com>"]
+channels = ["conda-forge"]
+platforms = ["win-64"]
+
+[dependencies]
+python = "3.12.*"
+
+# --- core geospatial ---
+geopandas = ">=1.0"
+shapely = ">=2.0"
+pyogrio = "*"
+pyproj = "*"
+fiona = "*"
+
+# --- raster / elevation ---
+rasterio = "*"
+rioxarray = "*"
+xarray = "*"
+scipy = "*"
+scikit-image = "*"
+numpy = "*"
+
+# --- graph / optimization ---
+networkx = "*"
+pulp = "*"
+highspy = "*"
+
+# --- notebook / viz ---
+marimo = "*"
+matplotlib = "*"
+altair = "*"
+folium = "*"
+mapclassify = "*"
+
+# --- data / utils ---
+pandas = "*"
+pyarrow = "*"
+requests = "*"
+python-dotenv = "*"
+tqdm = "*"
+gpxpy = "*"
+
+# --- dev ---
+pytest = "*"
+
+[pypi-dependencies]
+py3dep = "*"
+pynhd = "*"
+
+[tasks]
+# individual stages
+ingest = "python -m hullabaloo.ingest"
+topology = "python -m hullabaloo.topology"
+elevation = "python -m hullabaloo.elevation"
+bushwhack = "python -m hullabaloo.bushwhack"
+graph = "python -m hullabaloo.graph"
+optimize = "python -m hullabaloo.optimize_alns"
+milp = "python -m hullabaloo.optimize_milp"
+
+# end to end: skips any stage whose output already exists
+pipeline = "python -m hullabaloo.pipeline"
+# same, but also spends 10 minutes proving an optimality bound
+pipeline-bounded = "python -m hullabaloo.pipeline --alns-seeds 6 --milp-seconds 600"
+
+test = "pytest -q"
+app = "marimo run notebooks/hullabaloo_app.py"
+edit = "marimo edit notebooks/"
+
+[activation.env]
+PYTHONPATH = "src"

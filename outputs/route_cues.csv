@@ -1,0 +1,35 @@
+leg,segment,off_trail,miles,leg_min,elapsed,running_miles,running_trails,running_score
+1,BUSHWHACK,True,0.04,1.0,0:01,0.0,0,0.0
+2,Gateway,False,0.13,2.4,0:03,0.127,0,0.127
+3,Bike Park: Black,False,0.12,3.2,0:06,0.242,1,1.242
+4,Bike Park: Blue,False,0.15,3.0,0:09,0.391,2,2.391
+5,Bike Park: Climbing Trail,False,0.02,0.4,0:10,0.411,2,2.411
+6,Gateway,False,1.07,29.3,0:39,1.478,2,3.478
+7,Possum Track,False,0.3,6.3,0:45,1.778,2,3.778
+8,Snyder's Knob,False,0.44,10.2,0:55,2.22,3,5.22
+9,Possum Track,False,0.37,8.4,1:04,2.291,4,6.291
+10,Gateway,False,0.41,13.1,1:17,2.701,5,7.701
+11,Jacob's Ladder,False,1.23,26.8,1:44,3.935,6,9.935
+12,Poverty Creek (upper),False,0.09,1.8,1:45,4.025,6,10.025
+13,May Apple,False,0.75,15.0,2:00,4.775,7,11.775
+14,Snakeroot,False,0.07,1.6,2:02,4.848,7,11.848
+15,Poverty Creek (upper),False,0.27,5.6,2:08,5.116,7,12.116
+16,Royale,False,0.74,18.2,2:26,5.856,8,13.856
+17,Prickly Pear,False,0.83,19.7,2:46,6.683,9,15.683
+18,Skullcap,False,0.81,18.7,3:04,7.497,9,16.497
+19,Trillium,False,1.02,22.1,3:26,8.521,10,18.521
+20,Poverty Creek (lower),False,0.08,1.6,3:28,8.605,10,18.605
+21,Poverty Creek (upper),False,4.12,85.3,4:53,12.367,11,23.367
+22,BUSHWHACK,True,0.04,1.2,4:54,12.367,11,23.367
+23,Horse Nettle,False,1.45,36.7,5:31,13.821,12,25.821
+24,BUSHWHACK,True,0.15,6.8,5:38,13.821,12,25.821
+25,Running Cedar,False,0.8,17.7,5:55,14.622,13,27.622
+26,BUSHWHACK,True,0.11,3.9,5:59,14.622,13,27.622
+27,Horse Nettle Connector,False,0.42,8.3,6:08,15.042,14,29.042
+28,BUSHWHACK,True,0.13,4.3,6:12,15.042,14,29.042
+29,Gateway,False,1.09,23.3,6:35,15.042,14,29.042
+30,Lower Chimney,False,0.72,14.3,6:50,15.765,15,30.765
+31,BUSHWHACK,True,0.04,2.6,6:52,15.765,15,30.765
+32,Bike Park: Climbing Trail,False,0.17,3.1,6:55,15.911,16,31.911
+33,Gateway,False,0.13,2.4,6:58,15.911,16,31.911
+34,BUSHWHACK,True,0.04,1.4,6:59,15.911,16,31.911

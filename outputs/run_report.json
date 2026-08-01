@@ -1,0 +1,99 @@
+{
+  "config": {
+    "tobler": {
+      "base_kmh": 6.0,
+      "k": 3.5,
+      "s0": 0.05,
+      "off_trail_factor": 0.6,
+      "pace_factor": 1.0,
+      "min_speed_kmh": 0.15
+    },
+    "topology": {
+      "snap_tol_m": 18.0,
+      "simplify_tol_m": 0.5,
+      "min_edge_len_m": 1.0
+    },
+    "elevation": {
+      "smooth_sigma_m": 5.0,
+      "sample_step_m": 10.0,
+      "dem_buffer_m": 600.0,
+      "dem_resolution_m": 1
+    },
+    "bushwhack": {
+      "max_connector_dist_m": 900.0,
+      "min_detour_ratio": 2.5,
+      "max_connectors": 80,
+      "max_offtrail_slope": 1.0,
+      "cost_surface_res_m": 3.0
+    },
+    "race": {
+      "time_budget_s": 25200,
+      "points_per_trail": 1.0,
+      "points_per_mile": 1.0,
+      "max_trail_points": 40.0,
+      "max_mile_points": 40.0
+    }
+  },
+  "coverage_bound": {
+    "cover_all_lower_bound_h": 14.28,
+    "budget_h": 7.0,
+    "fraction_of_network_reachable": 0.49,
+    "total_network_miles": 40.14,
+    "max_possible_score": 80.0
+  },
+  "baseline_greedy": {
+    "score": 26.423,
+    "unique_miles": 10.423,
+    "trails_completed": 16,
+    "walked_miles": 14.29,
+    "offtrail_miles": 1.9,
+    "repeat_miles": 1.97,
+    "time_h": 6.359,
+    "time_budget_h": 7.0,
+    "feasible": true,
+    "n_arcs": 65
+  },
+  "baseline_best_ratio": {
+    "score": 24.06,
+    "unique_miles": 11.06,
+    "trails_completed": 13,
+    "walked_miles": 14.72,
+    "offtrail_miles": 1.28,
+    "repeat_miles": 2.38,
+    "time_h": 6.102,
+    "time_budget_h": 7.0,
+    "feasible": true,
+    "n_arcs": 58
+  },
+  "alns": {
+    "score": 31.911,
+    "unique_miles": 15.911,
+    "trails_completed": 16,
+    "walked_miles": 18.34,
+    "offtrail_miles": 0.54,
+    "repeat_miles": 1.89,
+    "time_h": 6.996,
+    "time_budget_h": 7.0,
+    "feasible": true,
+    "n_arcs": 58
+  },
+  "alns_order": [
+    46,
+    45,
+    39,
+    10,
+    13,
+    9,
+    38,
+    43,
+    35
+  ],
+  "route_validation": "OK",
+  "outputs": {
+    "geopackage": "C:\\Users\\Eric\\Desktop\\Ideas\\Hullabaloo\\outputs\\hullabaloo.gpkg",
+    "gpx": "C:\\Users\\Eric\\Desktop\\Ideas\\Hullabaloo\\outputs\\route.gpx",
+    "cues": "C:\\Users\\Eric\\Desktop\\Ideas\\Hullabaloo\\outputs\\route_cues.csv",
+    "map": "C:\\Users\\Eric\\Desktop\\Ideas\\Hullabaloo\\outputs\\route_map.png"
+  },
+  "elapsed_s": 27.4
+}
