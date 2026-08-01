@@ -8,11 +8,12 @@ You get 7 hours. You score two ways, each capped at 40 points:
 - **1 point per trail** completed end to end — there are 40 trails
 - **1 point per unique mile** of trail covered — there are 39.7 miles
 
-Covering the entire network would score a perfect 80. It would also take **14.3 hours**.
-With 7, only about 45% of the network is reachable, so the whole game is deciding *which*
-45%. That makes this a **prize-collecting arc routing problem**: points sit on edges rather
-than nodes, re-walking an edge earns nothing the second time, and the tour must start and
-finish at the trailhead.
+Covering the entire network would score a perfect 80. It would also take **14.3 hours** —
+and that is a lower bound that ignores all the backtracking a real closed loop forces. With
+7 hours the best possible is 35.37, or **44% of a perfect score**, covering 15.4 of the
+40.1 miles. The whole game is deciding *which* miles. That makes this a **prize-collecting
+arc routing problem**: points sit on edges rather than nodes, re-walking an edge earns
+nothing the second time, and the tour must start and finish at the trailhead.
 
 ![optimized route](outputs/route_map.png)
 
@@ -22,21 +23,25 @@ finish at the trailhead.
 |---|---|---|---|---|
 | greedy nearest-trail baseline | 26.42 | 16 | 10.42 | 6.36 h |
 | greedy best-ratio baseline | 24.06 | 13 | 11.06 | 6.10 h |
-| **ALNS** (6 seeds × 500 iterations) | **35.25** | **20** | **15.25** | **6.99 h** |
+| ALNS (6 seeds × 500 iterations) | 35.25 | 20 | 15.25 | 6.99 h |
+| **MILP — proven optimal** | **35.37** | **20** | **15.37** | **7.00 h** |
 
-A **33% improvement** over a sensible greedy baseline, and it uses 99.9% of the available
-time. Three of six seeds reached ≥35.0 and two landed on exactly 35.249, which is a decent
-sign the search is finding the right basin rather than getting lucky.
+**The problem is solved to proven global optimality.** HiGHS closed the gap to 0.00% in
+181 s: no 7-hour route scores better than **35.37**. That is a **34% improvement** over a
+sensible greedy baseline, and the route uses the full budget to the second.
 
-Worth noting: the optimizer explicitly targets only 14 trails, but the route *completes*
-20. The extra six are picked up for free on deadhead legs between targets — which is
-exactly why the evaluator scores every edge the walk touches rather than only the ones it
-set out to collect.
+The heuristic is not wasted — it reached 35.249, **within 0.34%** of the optimum, in a few
+minutes, and its incumbent is fed to the solver as a valid primal cut that prunes the
+search hard. Three of six seeds landed ≥35.0, so the search finds the right basin
+reliably rather than getting lucky.
 
-Because a heuristic cannot certify its own quality, the same problem is also written as a
-MILP and handed to HiGHS purely to produce an upper bound, so the result can be stated as a
-distance from proven optimal rather than an unqualified number. See
-[`outputs/run_report.json`](outputs/run_report.json) for the exact figures from the last run.
+Worth noting how the heuristic gets there: its solution encoding *targets* only 14 trails,
+yet the decoded route *completes* 20. The extra six are collected for free on deadhead legs
+between targets — which is exactly why the evaluator credits every edge the walk touches
+rather than only the ones it set out to collect. Scoring solely the targeted trails would
+have thrown away six points.
+
+See [`outputs/run_report.json`](outputs/run_report.json) for the exact figures.
 
 Deliverables land in `outputs/`:
 
@@ -135,10 +140,27 @@ trail not yet walked, and those miles score, so the evaluator credits every edge
 actually touches.
 
 **The bound.** The MILP exists to say what the heuristic cannot: how far from optimal the
-answer is. Its one easy-to-forget constraint is **connectivity** — flow conservation alone
-is satisfied by any set of disjoint circuits, so without a single-commodity-flow constraint
-tying the traversed subgraph to the depot, the solver returns a lovely high-scoring loop on
-the far side of the property that never touches the start line.
+answer is. At this size it does better than bound the problem — it closes it. Its one
+easy-to-forget constraint is **connectivity**: flow conservation alone is satisfied by any
+set of disjoint circuits, so without a single-commodity-flow constraint tying the traversed
+subgraph to the depot, the solver returns a lovely high-scoring loop on the far side of the
+property that never touches the start line.
+
+Two smaller things that made the difference between a bound and a proof:
+
+- **Feeding the heuristic's score in as a primal cut.** `objective >= 35.249` is valid
+  because ALNS actually achieved it, and it prunes an enormous amount of the tree without
+  excluding the optimum.
+- **Proving the 40-point category caps cannot bind, instead of modelling them.** The
+  network is 40.14 miles against a 40-mile cap, so the cap is not *obviously* unreachable
+  — but nobody exceeds Tobler's peak speed, and `7 h × 3.73 mph = 26.1 mi` is a hard
+  ceiling. `check_caps_nonbinding` asserts this rather than assuming it, which keeps a
+  step function out of the objective.
+
+One implementation trap worth recording: PuLP hands HiGHS the *negated* objective for
+maximization, so `mip_dual_bound` comes back with the opposite sign. Reading it naively
+produced an "upper bound" of −38 on a positive-valued maximization, and a meaningless 0%
+gap — which would have made the headline optimality claim pure fiction.
 
 ## Elevation
 

@@ -279,11 +279,13 @@ def _(mo):
 def _(mo):
     mo.md(
         r"""
-        ### ALNS, and then a bound
+        ### ALNS, and then a proof
 
         The heuristic finds good routes in seconds. It cannot tell you how good. So the
-        same problem is also written as a MILP and handed to HiGHS purely to produce an
-        **upper bound**, letting the result be stated as "within X% of proven optimal".
+        same problem is also written as a MILP and handed to HiGHS — and at this size the
+        solver does better than bound the problem, it **closes** it: gap 0.00% in 181 s,
+        proving no 7-hour route scores above **35.37**. The heuristic's 35.249 turns out
+        to be within **0.34%** of that.
 
         The MILP needs one constraint that is easy to forget: **connectivity**. Flow
         conservation alone is satisfied by any collection of disjoint circuits, so without
@@ -291,10 +293,18 @@ def _(mo):
         the solver will happily return a lovely high-scoring loop on the far side of the
         property that never touches the start line.
 
+        Two things turned a bound into a proof:
+
+        * feeding the ALNS score in as a primal cut (`objective >= 35.249`), valid because
+          the heuristic actually achieved it, which prunes the tree hard;
+        * proving the 40-point caps cannot bind rather than modelling them. The network is
+          40.14 miles against a 40-mile cap, so it is not *obviously* unreachable — but
+          `7 h x 3.73 mph = 26.1 mi` is a hard ceiling at Tobler's peak speed.
+
         One implementation trap worth recording: PuLP hands HiGHS the *negated* objective
         for maximization, so `mip_dual_bound` comes back with the opposite sign. Reading
-        it naively produced an "upper bound" of −38 on a positive-valued maximization,
-        which would have made the headline optimality claim meaningless.
+        it naively produced an "upper bound" of −38 on a positive-valued maximization and
+        a meaningless 0% gap, which would have made the optimality claim pure fiction.
         """
     )
     return

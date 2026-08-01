@@ -1,35 +1,54 @@
 leg,segment,off_trail,miles,leg_min,elapsed,running_miles,running_trails,running_score
 1,BUSHWHACK,True,0.04,1.0,0:01,0.0,0,0.0
 2,Gateway,False,0.13,2.4,0:03,0.127,0,0.127
-3,Bike Park: Black,False,0.12,3.2,0:06,0.242,1,1.242
-4,Bike Park: Blue,False,0.15,3.0,0:09,0.391,2,2.391
-5,Bike Park: Climbing Trail,False,0.02,0.4,0:10,0.411,2,2.411
-6,Gateway,False,1.07,29.3,0:39,1.478,2,3.478
-7,Possum Track,False,0.3,6.3,0:45,1.778,2,3.778
-8,Snyder's Knob,False,0.44,10.2,0:55,2.22,3,5.22
-9,Possum Track,False,0.37,8.4,1:04,2.291,4,6.291
-10,Gateway,False,0.41,13.1,1:17,2.701,5,7.701
-11,Jacob's Ladder,False,1.23,26.8,1:44,3.935,6,9.935
-12,Poverty Creek (upper),False,0.09,1.8,1:45,4.025,6,10.025
-13,May Apple,False,0.75,15.0,2:00,4.775,7,11.775
-14,Snakeroot,False,0.07,1.6,2:02,4.848,7,11.848
-15,Poverty Creek (upper),False,0.27,5.6,2:08,5.116,7,12.116
-16,Royale,False,0.74,18.2,2:26,5.856,8,13.856
-17,Prickly Pear,False,0.83,19.7,2:46,6.683,9,15.683
-18,Skullcap,False,0.81,18.7,3:04,7.497,9,16.497
-19,Trillium,False,1.02,22.1,3:26,8.521,10,18.521
-20,Poverty Creek (lower),False,0.08,1.6,3:28,8.605,10,18.605
-21,Poverty Creek (upper),False,4.12,85.3,4:53,12.367,11,23.367
-22,BUSHWHACK,True,0.04,1.2,4:54,12.367,11,23.367
-23,Horse Nettle,False,1.45,36.7,5:31,13.821,12,25.821
-24,BUSHWHACK,True,0.15,6.8,5:38,13.821,12,25.821
-25,Running Cedar,False,0.8,17.7,5:55,14.622,13,27.622
-26,BUSHWHACK,True,0.11,3.9,5:59,14.622,13,27.622
-27,Horse Nettle Connector,False,0.42,8.3,6:08,15.042,14,29.042
-28,BUSHWHACK,True,0.13,4.3,6:12,15.042,14,29.042
-29,Gateway,False,1.09,23.3,6:35,15.042,14,29.042
-30,Lower Chimney,False,0.72,14.3,6:50,15.765,15,30.765
-31,BUSHWHACK,True,0.04,2.6,6:52,15.765,15,30.765
-32,Bike Park: Climbing Trail,False,0.17,3.1,6:55,15.911,16,31.911
-33,Gateway,False,0.13,2.4,6:58,15.911,16,31.911
-34,BUSHWHACK,True,0.04,1.4,6:59,15.911,16,31.911
+3,Bike Park: Climbing Trail,False,0.02,0.6,0:04,0.148,0,0.148
+4,Bike Park: Blue,False,0.15,3.7,0:07,0.296,1,1.296
+5,Bike Park: Climbing Trail,False,0.15,2.7,0:10,0.442,2,2.442
+6,Bike Park: Green,False,0.14,3.5,0:13,0.583,3,3.583
+7,Bike Park: Black,False,0.12,2.3,0:16,0.698,4,4.698
+8,Gateway,False,0.09,2.2,0:18,0.791,4,4.791
+9,Lower Chimney,False,0.05,1.0,0:19,0.814,4,4.814
+10,Gateway,False,0.02,0.5,0:19,0.83,4,4.83
+11,Lower Chimney,False,0.03,0.8,0:20,0.864,4,4.864
+12,Gateway,False,1.34,39.0,0:59,2.199,4,6.199
+13,BUSHWHACK,True,0.13,5.9,1:05,2.199,4,6.199
+14,Horse Nettle Connector,False,0.42,9.3,1:14,2.619,5,7.619
+15,BUSHWHACK,True,0.11,3.4,1:18,2.619,5,7.619
+16,Running Cedar,False,0.62,11.7,1:29,3.236,5,8.236
+17,Old Road Bed,False,0.06,1.6,1:31,3.299,5,8.299
+18,Slytherin,False,0.03,0.6,1:32,3.327,5,8.327
+19,Grinder,False,0.31,6.6,1:38,3.642,5,8.642
+20,Old Road Bed,False,0.2,5.8,1:44,3.843,6,9.843
+21,Slytherin,False,0.03,0.6,1:44,3.843,6,9.843
+22,Grinder,False,0.12,3.3,1:48,3.966,7,10.966
+23,Running Cedar,False,0.18,3.8,1:52,4.15,8,12.15
+24,BUSHWHACK,True,0.15,5.4,1:57,4.15,8,12.15
+25,Horse Nettle,False,0.61,12.9,2:10,4.756,8,12.756
+26,Joe Pye,False,1.55,34.3,2:44,6.303,9,15.303
+27,Poverty Creek (upper),False,0.59,11.8,2:56,6.896,9,15.896
+28,Snakeroot,False,0.07,1.4,2:57,6.969,9,15.969
+29,May Apple,False,0.75,14.1,3:11,7.719,10,17.719
+30,Poverty Creek (upper),False,0.64,12.1,3:24,8.358,10,18.358
+31,Beauty,False,1.21,35.8,3:59,9.563,11,20.563
+32,BUSHWHACK,True,0.25,9.1,4:08,9.563,11,20.563
+33,Highway,False,0.02,0.5,4:09,9.583,11,20.583
+34,Crosscut,False,0.61,14.3,4:23,10.195,12,22.195
+35,Wilkes Wood,False,0.19,5.0,4:28,10.389,12,22.389
+36,Highway,False,0.29,6.4,4:35,10.679,12,22.679
+37,Turkey Trot,False,0.59,11.9,4:46,11.268,13,24.268
+38,Ida May,False,0.67,13.8,5:00,11.918,14,25.918
+39,Highway,False,0.08,1.5,5:02,12.003,14,26.003
+40,Pine Forest,False,0.48,10.9,5:13,12.484,15,27.484
+41,Highway,False,0.11,2.0,5:15,12.594,15,27.594
+42,BUSHWHACK,True,0.53,18.9,5:34,12.594,15,27.594
+43,Mineral Way,False,0.19,5.0,5:39,12.785,15,27.785
+44,Wavelength,False,0.8,21.5,6:00,13.585,16,29.585
+45,Upper Chimney,False,0.27,5.7,6:06,13.858,16,29.858
+46,Snyder's Knob,False,0.44,10.7,6:17,14.3,17,31.3
+47,Possum Track,False,0.44,9.8,6:26,14.671,18,32.671
+48,Gateway,False,0.68,13.8,6:40,14.671,18,32.671
+49,Lower Chimney,False,0.62,12.4,6:52,15.289,18,33.289
+50,Gateway,False,0.03,0.6,6:53,15.323,19,34.323
+51,Lower Chimney,False,0.05,0.9,6:54,15.37,20,35.37
+52,Gateway,False,0.22,4.1,6:58,15.37,20,35.37
+53,BUSHWHACK,True,0.04,1.4,6:59,15.37,20,35.37

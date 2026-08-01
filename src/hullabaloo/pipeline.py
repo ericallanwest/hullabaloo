@@ -113,6 +113,30 @@ def run(
                 milp.bound,
             )
 
+        # The MILP is here for the bound, but it sometimes also finds a strictly better
+        # route than the heuristic. Ship the better of the two — but only after checking
+        # the reconstructed walk is genuinely valid, since it comes out of a Hierholzer
+        # pass over the solver's arc multiset rather than from the decoder.
+        if milp.route is not None:
+            milp_problems = milp.route.validate()
+            report["milp_route_validation"] = milp_problems or "OK"
+            milp_eval = milp.route.evaluate()
+            report["milp_route"] = milp_eval
+            if not milp_problems and milp_eval["score"] > route.evaluate()["score"] + 1e-9:
+                log.info(
+                    "MILP route (%.3f) beats the ALNS route (%.3f) — shipping the MILP route",
+                    milp_eval["score"],
+                    route.evaluate()["score"],
+                )
+                route = milp.route
+                report["final_route_source"] = "milp"
+            else:
+                report["final_route_source"] = "alns"
+                if milp_problems:
+                    log.warning("MILP route failed validation (%s); keeping ALNS route", milp_problems)
+
+    report["final_route"] = route.evaluate()
+
     _stage("7 - exports")
     written = export.export_all(net, route)
     report["outputs"] = {k: str(v) for k, v in written.items()}

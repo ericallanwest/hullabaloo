@@ -66,34 +66,86 @@
     "n_arcs": 58
   },
   "alns": {
-    "score": 31.911,
-    "unique_miles": 15.911,
-    "trails_completed": 16,
-    "walked_miles": 18.34,
-    "offtrail_miles": 0.54,
-    "repeat_miles": 1.89,
-    "time_h": 6.996,
+    "score": 35.249,
+    "unique_miles": 15.249,
+    "trails_completed": 20,
+    "walked_miles": 17.63,
+    "offtrail_miles": 1.31,
+    "repeat_miles": 1.07,
+    "time_h": 6.991,
     "time_budget_h": 7.0,
     "feasible": true,
-    "n_arcs": 58
+    "n_arcs": 75
   },
   "alns_order": [
-    46,
-    45,
+    23,
+    2,
+    21,
+    18,
+    20,
+    16,
+    35,
     39,
-    10,
-    13,
-    9,
+    26,
     38,
+    46,
     43,
-    35
+    45,
+    44
   ],
   "route_validation": "OK",
+  "caps": {
+    "total_network_miles": 40.14,
+    "peak_speed_mph": 3.73,
+    "distance_ceiling_mi": 26.1,
+    "mile_cap": 40.0,
+    "mile_cap_reachable": false,
+    "n_trails": 40,
+    "trail_cap": 40.0,
+    "trail_cap_reachable": false,
+    "safe_to_omit_caps": true
+  },
+  "milp": {
+    "status": "Optimal",
+    "incumbent": 35.37,
+    "upper_bound": 35.37,
+    "gap_pct": 0.0,
+    "trails_completed": 20,
+    "solve_seconds": 135.8
+  },
+  "alns_gap_vs_milp_bound_pct": 0.34,
+  "milp_route_validation": "OK",
+  "milp_route": {
+    "score": 35.37,
+    "unique_miles": 15.37,
+    "trails_completed": 20,
+    "walked_miles": 17.64,
+    "offtrail_miles": 1.23,
+    "repeat_miles": 1.04,
+    "time_h": 7.0,
+    "time_budget_h": 7.0,
+    "feasible": true,
+    "n_arcs": 73
+  },
+  "final_route_source": "milp",
+  "final_route": {
+    "score": 35.37,
+    "unique_miles": 15.37,
+    "trails_completed": 20,
+    "walked_miles": 17.64,
+    "offtrail_miles": 1.23,
+    "repeat_miles": 1.04,
+    "time_h": 7.0,
+    "time_budget_h": 7.0,
+    "feasible": true,
+    "n_arcs": 73
+  },
   "outputs": {
     "geopackage": "C:\\Users\\Eric\\Desktop\\Ideas\\Hullabaloo\\outputs\\hullabaloo.gpkg",
     "gpx": "C:\\Users\\Eric\\Desktop\\Ideas\\Hullabaloo\\outputs\\route.gpx",
     "cues": "C:\\Users\\Eric\\Desktop\\Ideas\\Hullabaloo\\outputs\\route_cues.csv",
-    "map": "C:\\Users\\Eric\\Desktop\\Ideas\\Hullabaloo\\outputs\\route_map.png"
+    "map": "C:\\Users\\Eric\\Desktop\\Ideas\\Hullabaloo\\outputs\\route_map.png",
+    "interactive_map": "C:\\Users\\Eric\\Desktop\\Ideas\\Hullabaloo\\outputs\\route_map.html"
   },
-  "elapsed_s": 27.4
+  "elapsed_s": 1256.1
 }
