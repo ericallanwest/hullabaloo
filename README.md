@@ -20,13 +20,21 @@ finish at the trailhead.
 
 | | score | trails | unique miles | time |
 |---|---|---|---|---|
-| greedy nearest-trail baseline | 26.4 | 16 | 10.4 | 6.36 h |
-| greedy best-ratio baseline | 24.1 | 13 | 11.1 | 6.10 h |
-| **ALNS** | **35.2** | **19** | **16.2** | **6.99 h** |
+| greedy nearest-trail baseline | 26.42 | 16 | 10.42 | 6.36 h |
+| greedy best-ratio baseline | 24.06 | 13 | 11.06 | 6.10 h |
+| **ALNS** (6 seeds × 500 iterations) | **35.25** | **20** | **15.25** | **6.99 h** |
 
-The optimizer finds a **33% improvement** over a sensible greedy baseline. Because a
-heuristic cannot certify its own quality, the same problem is also written as a MILP and
-handed to HiGHS purely to produce an upper bound — so the result can be stated as a
+A **33% improvement** over a sensible greedy baseline, and it uses 99.9% of the available
+time. Three of six seeds reached ≥35.0 and two landed on exactly 35.249, which is a decent
+sign the search is finding the right basin rather than getting lucky.
+
+Worth noting: the optimizer explicitly targets only 14 trails, but the route *completes*
+20. The extra six are picked up for free on deadhead legs between targets — which is
+exactly why the evaluator scores every edge the walk touches rather than only the ones it
+set out to collect.
+
+Because a heuristic cannot certify its own quality, the same problem is also written as a
+MILP and handed to HiGHS purely to produce an upper bound, so the result can be stated as a
 distance from proven optimal rather than an unqualified number. See
 [`outputs/run_report.json`](outputs/run_report.json) for the exact figures from the last run.
 
@@ -36,6 +44,9 @@ Deliverables land in `outputs/`:
   `connectors`, `route`, `depot`
 - `route.gpx` — the tour as a GPX track with a predicted schedule, loadable onto a watch
 - `route_cues.csv` — turn-by-turn cue sheet with running time and running score
+- `route_map.html` — interactive Leaflet map on USGS topo/imagery layers. This is the tool
+  for checking the model against reality: every bushwhack connector can be inspected on
+  satellite imagery to confirm it crosses ground a person could actually walk
 - `route_map.png`, `run_report.json`
 
 ## Running it

@@ -22,4 +22,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .ipynb_checkpoints/
+
+# marimo session snapshots — regenerated on every run
 __marimo__/
+notebooks/__marimo__/

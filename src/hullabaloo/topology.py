@@ -313,13 +313,20 @@ def _add_depot(
     edges = edges.copy()
     nodes = nodes.copy()
 
+    # New rows are accumulated and concatenated at the end rather than assigned with
+    # `frame.loc[len(frame)] = ...`. That idiom is only safe on a clean RangeIndex: after
+    # dropping the split edge, `len(frame)` still names an existing label, so the "append"
+    # silently overwrites a real row instead of adding one.
+    new_edges: list[dict] = []
+    new_nodes: list[dict] = []
+
     # If the projection falls at an existing node, reuse it; otherwise split the edge.
     if along <= tol:
         anchor_node = int(nearest["u"])
-        anchor_pt = Point(nodes.loc[anchor_node, "geometry"].coords[0])
+        anchor_pt = Point(nodes.loc[nodes["node_id"] == anchor_node, "geometry"].iloc[0].coords[0])
     elif along >= nearest.geometry.length - tol:
         anchor_node = int(nearest["v"])
-        anchor_pt = Point(nodes.loc[anchor_node, "geometry"].coords[0])
+        anchor_pt = Point(nodes.loc[nodes["node_id"] == anchor_node, "geometry"].iloc[0].coords[0])
     else:
         anchor_node = int(nodes["node_id"].max()) + 1
         first = substring(nearest.geometry, 0, along)
@@ -331,42 +338,51 @@ def _add_depot(
             (first, int(nearest["u"]), anchor_node, next_edge_id),
             (second, anchor_node, int(nearest["v"]), next_edge_id + 1),
         ):
-            edges.loc[len(edges)] = {
-                "edge_id": eid,
-                "trail_id": nearest["trail_id"],
-                "name": nearest["name"],
-                "seq": nearest["seq"],
-                "length_m": geom.length,
-                "off_trail": False,
-                "geometry": geom,
-                "u": u,
-                "v": v,
-            }
-        nodes.loc[len(nodes)] = {"node_id": anchor_node, "geometry": anchor_pt}
+            new_edges.append(
+                {
+                    "edge_id": eid,
+                    "trail_id": nearest["trail_id"],
+                    "name": nearest["name"],
+                    "seq": nearest["seq"],
+                    "length_m": geom.length,
+                    "off_trail": False,
+                    "geometry": geom,
+                    "u": u,
+                    "v": v,
+                }
+            )
+        new_nodes.append({"node_id": anchor_node, "geometry": anchor_pt})
 
-    depot_node = int(nodes["node_id"].max()) + 1
-    nodes.loc[len(nodes)] = {"node_id": depot_node, "geometry": depot_pt}
+    depot_node = max(int(nodes["node_id"].max()), anchor_node) + 1
+    new_nodes.append({"node_id": depot_node, "geometry": depot_pt})
 
     access = LineString([depot_pt, anchor_pt])
-    edges.loc[len(edges)] = {
-        "edge_id": int(edges["edge_id"].max()) + 1,
-        "trail_id": pd.NA,
-        "name": "depot access",
-        "seq": 0,
-        "length_m": access.length,
-        "off_trail": True,  # priced at the off-trail speed factor
-        "geometry": access,
-        "u": depot_node,
-        "v": anchor_node,
-    }
+    max_edge_id = max(
+        int(edges["edge_id"].max()), max((e["edge_id"] for e in new_edges), default=-1)
+    )
+    new_edges.append(
+        {
+            "edge_id": max_edge_id + 1,
+            "trail_id": pd.NA,
+            "name": "depot access",
+            "seq": 0,
+            "length_m": access.length,
+            "off_trail": True,  # priced at the off-trail speed factor
+            "geometry": access,
+            "u": depot_node,
+            "v": anchor_node,
+        }
+    )
 
-    # Appending rows via .loc degrades the geometry column to plain object dtype and
-    # silently drops the CRS, so rebuild both frames explicitly.
     edges = gpd.GeoDataFrame(
-        edges.reset_index(drop=True), geometry="geometry", crs=CRS_PROJECTED
+        pd.concat([edges, pd.DataFrame(new_edges)], ignore_index=True),
+        geometry="geometry",
+        crs=CRS_PROJECTED,
     )
     nodes = gpd.GeoDataFrame(
-        nodes.reset_index(drop=True), geometry="geometry", crs=CRS_PROJECTED
+        pd.concat([nodes, pd.DataFrame(new_nodes)], ignore_index=True),
+        geometry="geometry",
+        crs=CRS_PROJECTED,
     )
     edges["u"] = edges["u"].astype(int)
     edges["v"] = edges["v"].astype(int)

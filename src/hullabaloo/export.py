@@ -30,6 +30,7 @@ GPKG_PATH = OUTPUTS / "hullabaloo.gpkg"
 GPX_PATH = OUTPUTS / "route.gpx"
 CUES_PATH = OUTPUTS / "route_cues.csv"
 MAP_PATH = OUTPUTS / "route_map.png"
+MAP_HTML_PATH = OUTPUTS / "route_map.html"
 
 
 # --------------------------------------------------------------------------------------
@@ -37,21 +38,30 @@ MAP_PATH = OUTPUTS / "route_map.png"
 # --------------------------------------------------------------------------------------
 
 
-def arc_geometry(net: Network, arc) -> LineString:
+def _edge_lookup(net: Network) -> dict[int, tuple[LineString, int, float]]:
+    """``edge_id -> (geometry, u, length_m)``, built once instead of scanning per arc."""
+    return {
+        int(r.edge_id): (r.geometry, int(r.u), float(r.length_m))
+        for r in net.edges.itertuples(index=False)
+    }
+
+
+def arc_geometry(net: Network, arc, lookup: dict | None = None) -> LineString:
     """Geometry of one arc, oriented in the direction of travel."""
-    row = net.edges.loc[net.edges["edge_id"] == arc.edge_id].iloc[0]
-    geom = row.geometry
-    # Edge geometry runs from row.u to row.v; flip it when the arc goes the other way.
-    if int(row["u"]) != arc.u:
+    lookup = lookup if lookup is not None else _edge_lookup(net)
+    geom, edge_u, _ = lookup[arc.edge_id]
+    # Edge geometry runs from edge_u to edge_v; flip it when the arc goes the other way.
+    if edge_u != arc.u:
         geom = LineString(list(geom.coords)[::-1])
     return geom
 
 
 def route_geometry(route: Route) -> LineString:
     """The whole tour as one continuous LineString, in traversal order."""
+    lookup = _edge_lookup(route.net)
     coords: list[tuple[float, float]] = []
     for arc in route.arcs:
-        piece = list(arc_geometry(route.net, arc).coords)
+        piece = list(arc_geometry(route.net, arc, lookup).coords)
         if coords and coords[-1] == piece[0]:
             piece = piece[1:]
         coords.extend(piece)
@@ -61,6 +71,7 @@ def route_geometry(route: Route) -> LineString:
 def route_gdf(route: Route) -> gpd.GeoDataFrame:
     """One row per arc, with running time and running score — the analytical view."""
     net = route.net
+    lookup = _edge_lookup(net)
     rows = []
     elapsed = 0.0
     seen: set[int] = set()
@@ -85,7 +96,8 @@ def route_gdf(route: Route) -> gpd.GeoDataFrame:
                 "running_miles": round(miles, 3),
                 "running_trails": trails,
                 "running_score": round(score, 3),
-                "geometry": arc_geometry(net, arc),
+                "length_m": lookup[arc.edge_id][2],
+                "geometry": arc_geometry(net, arc, lookup),
             }
         )
     return gpd.GeoDataFrame(rows, geometry="geometry", crs=net.edges.crs)
@@ -113,9 +125,7 @@ def cue_sheet(route: Route) -> pd.DataFrame:
             leg["running_score"] = row.running_score
             leg["running_miles"] = row.running_miles
             leg["running_trails"] = row.running_trails
-            leg["length_m"] += route.net.edges.set_index("edge_id")["length_m"].get(
-                row.edge_id, 0.0
-            )
+            leg["length_m"] += row.length_m
         else:
             groups.append(
                 {
@@ -123,9 +133,7 @@ def cue_sheet(route: Route) -> pd.DataFrame:
                     "off_trail": row.off_trail,
                     "from_node": row.from_node,
                     "to_node": row.to_node,
-                    "length_m": route.net.edges.set_index("edge_id")["length_m"].get(
-                        row.edge_id, 0.0
-                    ),
+                    "length_m": row.length_m,
                     "time_s": row.time_s,
                     "elapsed_s": row.elapsed_s,
                     "running_miles": row.running_miles,
@@ -309,6 +317,98 @@ def plot_route(net: Network, route: Route | None, path: Path = MAP_PATH, dpi: in
     return path
 
 
+def write_interactive_map(
+    net: Network, route: Route | None = None, path: Path = MAP_HTML_PATH
+):
+    """Self-contained Leaflet map on USGS topo/imagery basemaps.
+
+    This is the tool for actually checking the model against reality: every bushwhack
+    connector can be inspected against satellite imagery to confirm it crosses ground a
+    person could plausibly walk, and that it does not cut across the pond.
+    """
+    import folium
+
+    nodes_wgs = net.nodes.to_crs(CRS_GEOGRAPHIC)
+    depot = nodes_wgs[nodes_wgs.get("is_depot", False) == True]  # noqa: E712
+    center = (
+        [depot.geometry.iloc[0].y, depot.geometry.iloc[0].x]
+        if len(depot)
+        else [nodes_wgs.geometry.y.mean(), nodes_wgs.geometry.x.mean()]
+    )
+
+    fmap = folium.Map(location=center, zoom_start=14, tiles=None)
+    folium.TileLayer(
+        tiles="https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}",
+        attr="USGS The National Map",
+        name="USGS Topo",
+    ).add_to(fmap)
+    folium.TileLayer(
+        tiles="https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}",
+        attr="USGS The National Map",
+        name="USGS Imagery",
+    ).add_to(fmap)
+    folium.TileLayer("OpenStreetMap", name="OpenStreetMap").add_to(fmap)
+
+    edges_wgs = net.edges.to_crs(CRS_GEOGRAPHIC)
+    used_edges = route.edges_used if route is not None else set()
+
+    unused = folium.FeatureGroup(name="trail network (not used)", show=True)
+    for row in edges_wgs[~edges_wgs["off_trail"]].itertuples(index=False):
+        if row.edge_id in used_edges:
+            continue
+        folium.PolyLine(
+            [(y, x) for x, y in row.geometry.coords],
+            color="#8d949e",
+            weight=2,
+            opacity=0.75,
+            tooltip=f"{row.name} (not on route)",
+        ).add_to(unused)
+    unused.add_to(fmap)
+
+    connectors = folium.FeatureGroup(name="all candidate bushwhacks", show=False)
+    for row in edges_wgs[edges_wgs["off_trail"]].itertuples(index=False):
+        folium.PolyLine(
+            [(y, x) for x, y in row.geometry.coords],
+            color="#ff7f0e",
+            weight=2,
+            dash_array="4,6",
+            tooltip=f"{row.name}: {row.length_m:.0f} m",
+        ).add_to(connectors)
+    connectors.add_to(fmap)
+
+    if route is not None and route.arcs:
+        detail = route_gdf(route).to_crs(CRS_GEOGRAPHIC)
+        on_route = folium.FeatureGroup(name="route (on trail)", show=True)
+        bushwhack = folium.FeatureGroup(name="route (bushwhack)", show=True)
+        for row in detail.itertuples(index=False):
+            line = folium.PolyLine(
+                [(y, x) for x, y in row.geometry.coords],
+                color="#d62728" if row.off_trail else "#1f77b4",
+                weight=5 if row.off_trail else 4,
+                dash_array="6,6" if row.off_trail else None,
+                tooltip=(
+                    f"step {row.step}: {row.name}<br>"
+                    f"{row.elapsed_h:.2f} h elapsed<br>"
+                    f"score so far {row.running_score}"
+                ),
+            )
+            line.add_to(bushwhack if row.off_trail else on_route)
+        on_route.add_to(fmap)
+        bushwhack.add_to(fmap)
+
+    if len(depot):
+        folium.Marker(
+            center,
+            tooltip="START / FINISH",
+            icon=folium.Icon(color="green", icon="flag"),
+        ).add_to(fmap)
+
+    folium.LayerControl(collapsed=False).add_to(fmap)
+    fmap.save(str(path))
+    log.info("wrote %s", path.name)
+    return path
+
+
 def export_all(net: Network, route: Route | None = None) -> dict[str, Path]:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     written = {"geopackage": write_geopackage(net, route)}
@@ -319,4 +419,8 @@ def export_all(net: Network, route: Route | None = None) -> dict[str, Path]:
         written["cues"] = CUES_PATH
         log.info("cue sheet:\n%s", cues.to_string(index=False))
     written["map"] = plot_route(net, route)
+    try:
+        written["interactive_map"] = write_interactive_map(net, route)
+    except Exception as exc:  # noqa: BLE001 - a missing basemap must not fail the run
+        log.warning("interactive map skipped (%s)", exc)
     return written

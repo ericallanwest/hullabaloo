@@ -142,6 +142,43 @@ def test_every_trail_survived_and_is_contiguous():
         assert len({comp[int(n)] for n in used}) == 1, f"trail {trail_id} is fragmented"
 
 
+def test_adding_the_depot_never_destroys_edges():
+    """Regression: the depot insertion used ``frame.loc[len(frame)] = ...`` to append.
+
+    That is only safe on a clean RangeIndex. After dropping the edge being split,
+    ``len(frame)`` still names an existing label, so the "append" silently overwrote a
+    real row. It stayed invisible because the actual start point happens to land on an
+    existing node, skipping the split branch entirely — so this test forces the split
+    branch by anchoring the depot mid-edge.
+    """
+    from unittest.mock import patch
+
+    from hullabaloo import topology as topo
+
+    trails = _load(TRAILS_RAW)
+    plain_edges, plain_nodes, _ = topo.build_network(trails, add_depot=False)
+
+    # Pick a point squarely in the middle of a long edge so the split branch must run.
+    longest = plain_edges.loc[plain_edges["length_m"].idxmax()]
+    midpoint = longest.geometry.interpolate(longest.geometry.length / 2)
+    lon, lat = (
+        gpd.GeoSeries([midpoint], crs="EPSG:6346").to_crs("EPSG:4326").iloc[0].coords[0]
+    )
+
+    with patch.object(topo, "START_LON", lon), patch.object(topo, "START_LAT", lat):
+        edges, nodes, depot = topo.build_network(trails, add_depot=True)
+
+    # One edge becomes two (+1) and the depot access edge is added (+1).
+    assert len(edges) == len(plain_edges) + 2
+    assert len(nodes) == len(plain_nodes) + 2
+    assert edges["edge_id"].is_unique
+    assert nodes["node_id"].is_unique
+    assert edges.loc[edges["off_trail"], "name"].tolist() == ["depot access"]
+
+    on_trail_m = edges.loc[~edges["off_trail"], "length_m"].sum()
+    assert on_trail_m == pytest.approx(plain_edges["length_m"].sum(), rel=1e-6)
+
+
 def test_trail_network_alone_has_three_components():
     """The three components are separated by genuine 285-700 m gaps. If this ever changes
     the bushwhack phase's reason for existing has changed with it."""
