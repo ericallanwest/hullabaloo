@@ -55,6 +55,20 @@ function fmtMS(s) {
        + `${String(seconds).padStart(2, '0')}s`;
 }
 
+// The race runs 07:00 to 14:00 local. Presets carry elapsed seconds only, so wall-clock
+// time is derived here — change this one constant if the start time ever moves.
+const RACE_START_HOUR = 7;
+
+function fmtTimeOfDay(elapsedSeconds) {
+  // Floor, not round — a clock reads 7:00 until 7:01 actually arrives, and this shares a
+  // line with the elapsed figure, which floors too. Rounding one and flooring the other
+  // makes 45 seconds in read "7:01am · 0:00 elapsed".
+  const minutes = Math.floor(elapsedSeconds / 60);
+  const hour24 = RACE_START_HOUR + Math.floor(minutes / 60);
+  const hour12 = ((hour24 + 11) % 12) + 1;           // 12 -> 12pm, 13 -> 1pm
+  return `${hour12}:${String(minutes % 60).padStart(2, '0')}${hour24 >= 12 ? 'pm' : 'am'}`;
+}
+
 function fmtClock(s) {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
   return `${h}:${String(m).padStart(2, '0')}`;
@@ -173,11 +187,13 @@ function updateSidebar(step) {
   $('sbClock').textContent =
     `${fmtClock(cum.seconds)} elapsed of ${fmtClock(budget)} · ${esc(s.name)}`;
 
-  const secs = catSeconds(step);
+  const run = cumThrough(step);
   $('sbTotal').textContent  = `${cum.miles.toFixed(1)} mi / ${fmtHM(cum.seconds)}`;
-  $('sbUnique').textContent = `${cum.unique_miles.toFixed(1)} mi / ${fmtHM(secs.unique)}`;
-  $('sbRepeat').textContent = `${cum.repeat_miles.toFixed(1)} mi / ${fmtHM(secs.repeat)}`;
-  $('sbOff').textContent    = `${cum.offtrail_miles.toFixed(1)} mi / ${fmtHM(secs.offtrail)}`;
+  $('sbUnique').textContent = `${cum.unique_miles.toFixed(1)} mi / ${fmtHM(run.unique)}`;
+  $('sbRepeat').textContent = `${cum.repeat_miles.toFixed(1)} mi / ${fmtHM(run.repeat)}`;
+  $('sbOff').textContent    = `${cum.offtrail_miles.toFixed(1)} mi / ${fmtHM(run.offtrail)}`;
+  $('sbElev').textContent   =
+    `${run.gain.toLocaleString()} ft ↑ / ${run.loss.toLocaleString()} ft ↓`;
   $('sbTrails').textContent = `${cum.trails_completed} of ${PRESET.network.n_trails}`;
   $('sbScore').textContent  = cum.score.toFixed(2);
 
@@ -185,12 +201,18 @@ function updateSidebar(step) {
   $('stepSlider').value = step;
 }
 
-// Durations by category are summed here rather than shipped per step: the exporter
-// already carries cumulative miles per category, and the three categories partition the
-// walk, so the matching seconds are one pass away and need no extra bytes on the wire.
-function catSeconds(step) {
-  const totals = { unique: 0, repeat: 0, offtrail: 0 };
-  for (let i = 0; i < step; i++) totals[PRESET.steps[i].cat] += PRESET.steps[i].seconds;
+// Summed here rather than shipped per step: the exporter already carries cumulative
+// miles per category and per-leg relief, and the three categories partition the walk, so
+// the matching seconds and the running gain/loss are one pass away over data already on
+// the wire. Cheap at this size — under a hundred legs, recomputed per step.
+function cumThrough(step) {
+  const totals = { unique: 0, repeat: 0, offtrail: 0, gain: 0, loss: 0 };
+  for (let i = 0; i < step; i++) {
+    const s = PRESET.steps[i];
+    totals[s.cat] += s.seconds;
+    totals.gain += s.gain_ft;
+    totals.loss += s.loss_ft;
+  }
   return totals;
 }
 
@@ -212,7 +234,7 @@ function buildItinerary() {
       ${done ? ` <span class="itin-done">✓ ${done.length} trail${done.length > 1 ? 's' : ''}</span>` : ''}
       <span class="itin-meta">
         ${s.miles.toFixed(2)} mi &nbsp; ${fmtMS(s.seconds)} &nbsp; ${s.gain_ft} ft ↑ / ${s.loss_ft} ft ↓<br>
-        ${fmtClock(s.cum.seconds)} elapsed &nbsp;·&nbsp; score ${s.cum.score.toFixed(2)}
+        ${fmtTimeOfDay(s.cum.seconds)} &nbsp;·&nbsp; ${fmtClock(s.cum.seconds)} elapsed &nbsp;·&nbsp; score ${s.cum.score.toFixed(2)}
       </span>
     </div>`;
   }).join('');

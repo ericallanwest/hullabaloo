@@ -497,6 +497,24 @@ def test_traversal_categories_partition_the_walk(net, sample_route):
     assert unique["first_visit"].all()
 
 
+def test_a_closed_loop_gains_exactly_what_it_loses(net, sample_route):
+    """Total climb must equal total descent, because the route ends where it started.
+
+    Per arc, gain minus loss telescopes to (end elevation - start elevation), so over a
+    closed walk the difference is exactly zero. That makes this the one independent check
+    on :func:`export.arc_relief_m`, which picks between the stored forward and reverse
+    gains by comparing the arc's tail to the edge's. Get that backwards and every climb
+    reads as a descent -- while every individual number still looks entirely plausible.
+    """
+    from hullabaloo.export import route_gdf
+
+    detail = route_gdf(sample_route)
+    assert sample_route.arcs[0].u == net.depot
+    assert sample_route.arcs[-1].v == net.depot
+    assert detail["gain_m"].sum() == pytest.approx(detail["loss_m"].sum(), abs=0.05)
+    assert detail["gain_m"].sum() > 100, "a real route over this terrain must climb"
+
+
 def test_group_arcs_splits_a_first_pass_from_an_adjacent_repeat():
     """The web export keys legs on ``(label, category)`` rather than the label alone.
 
