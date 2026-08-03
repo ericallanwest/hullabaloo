@@ -94,7 +94,6 @@ body.sidebar-hidden #sidebar-toggle { right: 0; }
 .title-block h1 {
   font-size: 19px; font-weight: 700; color: var(--accent); letter-spacing: -.01em;
 }
-.title-block p { font-size: 11px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
 
 .param-group { margin-bottom: 14px; }
 .param-label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); margin-bottom: 6px; cursor: help; }
