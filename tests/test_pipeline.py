@@ -220,6 +220,78 @@ def test_forest_roads_connect_the_whole_network():
     assert roads["trail_id"].isna().all(), "roads must not carry a scoring trail_id"
 
 
+#: The two ways that close the gap the optimizer used to bushwhack across. Neither is
+#: ``highway=track``, so both were invisible to the original road import.
+MEADOWBROOK = "Meadowbrook Drive"
+STONE_CUTTER = "Stone Cutter's Hollow Access Road"
+
+
+def test_the_named_osm_ways_reached_the_network():
+    """Meadowbrook Drive and Stone Cutter's Hollow Access Road must be in the edge table.
+
+    They enter through a name-matched Overpass clause rather than ``highway=track``:
+    Meadowbrook is a paved ``highway=tertiary`` and Stone Cutter a gravel ``highway=path``.
+    A silent Overpass failure, a cached ``osm_roads.geojson``, or an OSM rename would each
+    drop them without any other symptom — the pipeline would just quietly go back to
+    bushwhacking.
+    """
+    edges = _load(EDGES)
+    for name in (MEADOWBROOK, STONE_CUTTER):
+        assert (edges["name"] == name).any(), f"{name} is missing from the network"
+    assert (edges.loc[edges["name"] == MEADOWBROOK, "trail_id"].isna()).all(), (
+        "roads must not carry a scoring trail_id"
+    )
+
+
+def test_the_named_ways_form_the_corridor_they_were_added_for():
+    """The point of adding them is a continuous legal route, so assert the joins exist.
+
+    Highway -> Meadowbrook -> Stone Cutter -> Mineral Way / Wavelength is precisely where
+    the two longest bushwhack connectors ran. The gaps are 10 m and 9 m, inside the 18 m
+    snap tolerance, so topology should fuse them — but "should" is the whole reason to
+    check. Nudge ``snap_tol_m`` down and this silently becomes four disconnected stubs.
+    """
+    edges = _load(EDGES)
+
+    def endpoints(name):
+        segment = edges[edges["name"] == name]
+        return set(segment["u"]) | set(segment["v"])
+
+    for left, right in (
+        (MEADOWBROOK, "Highway"),
+        (MEADOWBROOK, STONE_CUTTER),
+        (STONE_CUTTER, "Mineral Way"),
+        (STONE_CUTTER, "Wavelength"),
+    ):
+        assert endpoints(left) & endpoints(right), f"{left} does not meet {right}"
+
+
+def test_meadowbrook_is_continuous_but_stops_short_of_glade_road():
+    """Meadowbrook must arrive as one connected road, and only the useful half of it.
+
+    Both halves of this matter, and they pull against each other. The two OSM ways total
+    about 4 km; only the ~2 km reaching from the Highway junction to Stone Cutter is
+    wanted, so a figure drifting toward 2.5 mi means the clip has stopped trimming and the
+    graph is carrying suburban road no route would walk.
+
+    Connectivity is the half that actually bit. Clipping each way to the 250 m buffer
+    independently split this road into three pieces, because its middle runs further than
+    that from any trail — and the optimizer promptly bushwhacked 0.38 mi across the gap,
+    retracing the road's own alignment off-trail. One piece, or the import is pointless.
+    """
+    import networkx as nx
+
+    edges = _load(EDGES)
+    segment = edges[edges["name"] == MEADOWBROOK]
+    miles = segment["length_m"].sum() / M_PER_MILE
+    assert 0.9 < miles < 1.7, f"Meadowbrook Drive contributes {miles:.2f} mi; expected ~1.27"
+
+    graph = nx.Graph()
+    graph.add_edges_from(zip(segment["u"], segment["v"]))
+    pieces = nx.number_connected_components(graph)
+    assert pieces == 1, f"Meadowbrook Drive is in {pieces} disconnected pieces, expected 1"
+
+
 def test_roads_cost_time_but_score_nothing():
     edges = _load(EDGES_TIMED)
     roads = edges[edges["is_road"] == True]  # noqa: E712
@@ -298,6 +370,32 @@ def test_connectors_avoid_water_and_developed_land():
             developed_hits.append((row.name, round(fraction, 2)))
 
     assert not developed_hits, f"connectors crossing developed land: {developed_hits}"
+
+
+def test_no_connector_cuts_a_switchback():
+    """No off-trail connector may join two points on the same trail.
+
+    Cutting the inside of a switchback is how erosion scars start: the trail climbs a
+    hillside in traverses precisely so that boots do not run straight down the fall line.
+    A model that offers the shortcut is proposing a route nobody should walk, and it gains
+    nothing anyway — a trail's miles only score when the trail itself is walked.
+    """
+    connectors = _load(CONNECTORS)
+    edges = _load(EDGES)
+
+    on_trail: dict[int, set[int]] = {}
+    for row in edges.itertuples(index=False):
+        if row.trail_id != row.trail_id:  # NaN
+            continue
+        for node in (int(row.u), int(row.v)):
+            on_trail.setdefault(node, set()).add(int(row.trail_id))
+
+    offenders = [
+        (int(r.u), int(r.v), sorted(on_trail.get(int(r.u), set()) & on_trail.get(int(r.v), set())))
+        for r in connectors.itertuples(index=False)
+        if on_trail.get(int(r.u), set()) & on_trail.get(int(r.v), set())
+    ]
+    assert not offenders, f"connectors cutting their own trail: {offenders}"
 
 
 def test_connectors_are_slower_than_trail_for_the_same_ground():

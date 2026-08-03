@@ -30,6 +30,7 @@ from .config import (
     CONFIG,
     CONNECTORS,
     CRS_PROJECTED,
+    RAW,
     BushwhackParams,
     EDGES_TIMED,
     ElevationParams,
@@ -115,26 +116,63 @@ NHD_WATERBODY_URL = (
 MAX_PLAUSIBLE_WATER_FRACTION = 0.02
 
 
-def fetch_waterbodies(bounds_wgs84: tuple[float, float, float, float]):
+#: The NHD endpoint routinely takes ~50 s to answer this bbox and has been seen to exceed
+#: two minutes under load. Failing here is not benign: the fallback flatness heuristic is
+#: unreliable enough that it gets discarded, which leaves connectors free to cross the
+#: pond. Waiting is much cheaper than a route that swims.
+NHD_TIMEOUT_S = 300
+NHD_ATTEMPTS = 3
+
+#: Cached like the DEM tile and the OSM roads, and for the same reason. The waterbodies
+#: for a fixed study area never change, but the service is intermittently down — it has
+#: been observed answering in 51 s, timing out at 120 s, and returning 502 for minutes at
+#: a stretch. Without a cache a transient outage silently downgrades the run to "no water
+#: masked", which is the one failure here that produces a plausible-looking wrong answer.
+WATERBODIES_PATH = RAW / "nhd_waterbodies.geojson"
+
+
+def fetch_waterbodies(
+    bounds_wgs84: tuple[float, float, float, float],
+    path=WATERBODIES_PATH,
+    *,
+    force: bool = False,
+):
     """NHD waterbody polygons intersecting the bbox, in ``CRS_PROJECTED``."""
     import requests
 
-    resp = requests.get(
-        NHD_WATERBODY_URL,
-        params={
-            "geometry": ",".join(str(v) for v in bounds_wgs84),
-            "geometryType": "esriGeometryEnvelope",
-            "inSR": 4326,
-            "outSR": 4326,
-            "spatialRel": "esriSpatialRelIntersects",
-            "outFields": "GNIS_NAME,AREASQKM,FTYPE",
-            "returnGeometry": "true",
-            "f": "geojson",
-        },
-        timeout=120,
-    )
-    resp.raise_for_status()
-    payload = resp.json()
+    if path.exists() and not force:
+        log.info("using cached NHD waterbodies at %s", path.name)
+        return gpd.read_file(path).to_crs(CRS_PROJECTED)
+
+    payload = None
+    for attempt in range(NHD_ATTEMPTS):
+        try:
+            resp = requests.get(
+                NHD_WATERBODY_URL,
+                params={
+                    "geometry": ",".join(str(v) for v in bounds_wgs84),
+                    "geometryType": "esriGeometryEnvelope",
+                    "inSR": 4326,
+                    "outSR": 4326,
+                    "spatialRel": "esriSpatialRelIntersects",
+                    "outFields": "GNIS_NAME,AREASQKM,FTYPE",
+                    "returnGeometry": "true",
+                    "f": "geojson",
+                },
+                timeout=NHD_TIMEOUT_S,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+            break
+        except Exception as exc:  # noqa: BLE001
+            log.warning("NHD waterbody query attempt %d failed: %s", attempt + 1, exc)
+    if payload is None:
+        raise RuntimeError(f"NHD waterbody query failed {NHD_ATTEMPTS} times")
+    if payload.get("features"):
+        gpd.GeoDataFrame.from_features(payload["features"], crs="EPSG:4326").to_file(
+            path, driver="GeoJSON"
+        )
+        log.info("cached %d NHD waterbodies -> %s", len(payload["features"]), path.name)
     if not payload.get("features"):
         return gpd.GeoDataFrame(geometry=[], crs=CRS_PROJECTED)
     gdf = gpd.GeoDataFrame.from_features(payload["features"], crs="EPSG:4326")
@@ -348,6 +386,13 @@ def candidate_pairs(
     * **within-component shortcuts** — pairs that are close as the crow flies but far
       apart on the network (high detour ratio), which is where a bushwhack can actually
       pay for itself.
+
+    Pairs whose endpoints both sit on the *same* trail are rejected outright. Those are
+    switchback cuts: the model would happily send you straight down a hillside the trail
+    climbs in traverses, which is how erosion scars start and is exactly the behaviour
+    trail etiquette exists to prevent. It is not a question of whether the optimizer would
+    take one — it is that offering the option at all models a route nobody should walk.
+    They earn nothing either way, since only walking the trail itself scores its miles.
     """
     import networkx as nx
 
@@ -355,6 +400,16 @@ def candidate_pairs(
 
     comp = connected_components(edges, len(nodes))
     coords = np.array([[g.x, g.y] for g in nodes.geometry])
+
+    # node -> the trails it lies on, so a shared trail can be spotted. A junction node
+    # belongs to several, and sharing any one of them means the connector would parallel
+    # that trail off-piste.
+    on_trail: dict[int, set[int]] = {}
+    for row in edges.itertuples(index=False):
+        if row.trail_id is None or row.trail_id != row.trail_id:  # NaN check
+            continue
+        for node in (int(row.u), int(row.v)):
+            on_trail.setdefault(node, set()).add(int(row.trail_id))
 
     graph = nx.Graph()
     graph.add_nodes_from(range(len(nodes)))
@@ -370,11 +425,15 @@ def candidate_pairs(
     pairs: list[tuple[int, int, str]] = []
     seen: set[tuple[int, int]] = set()
 
+    switchbacks = 0
     for i, j in tree.query_pairs(params.max_connector_dist_m):
         key = (min(i, j), max(i, j))
         if key in seen:
             continue
         seen.add(key)
+        if on_trail.get(i, set()) & on_trail.get(j, set()):
+            switchbacks += 1
+            continue
         straight = float(np.linalg.norm(coords[i] - coords[j]))
         if comp[i] != comp[j]:
             pairs.append((i, j, "cross-component"))
@@ -390,10 +449,12 @@ def candidate_pairs(
             pairs.append((i, j, "shortcut"))
 
     log.info(
-        "%d candidate pairs (%d cross-component, %d shortcut)",
+        "%d candidate pairs (%d cross-component, %d shortcut); "
+        "rejected %d same-trail pairs as switchback cuts",
         len(pairs),
         sum(1 for p in pairs if p[2] == "cross-component"),
         sum(1 for p in pairs if p[2] == "shortcut"),
+        switchbacks,
     )
     return pairs
 
