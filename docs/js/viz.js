@@ -24,6 +24,17 @@ const MAPWARPER_BOUNDS = [[37.2329516, -80.5472426], [37.2920102, -80.4451182]];
 // from vanishing when a deeper basemap is selected.
 const MAPWARPER_NATIVE_ZOOM = 16;
 
+// Page 2 of the printed sheet, drawn at roughly 1:10000 against Page 1's 1:20000 — twice
+// the detail over a smaller area. Set the id once it is georeferenced, and fill in the
+// bounds from the MapWarper API (the `bbox` field of /api/v1/maps/<id>).
+//
+// The two sheets need no cross-fading or zoom switching to coexist: this one is bounded
+// to its own extent and stacks above Page 1, so it paints only where it has coverage and
+// simply reveals Page 1 everywhere else. Both sliders stay independent.
+const MAPWARPER_ID_2 = null;
+const MAPWARPER_2_BOUNDS = MAPWARPER_BOUNDS;   // replace with Page 2's own extent
+const MAPWARPER_2_NATIVE_ZOOM = 17;            // one more zoom of real detail than Page 1
+
 const CAT_COLOR = { unique: '#f7882f', offtrail: '#c0392b', repeat: '#c0392b' };
 const CAT_LABEL = { unique: '', offtrail: 'off-trail', repeat: 'repeat' };
 const GOLD = '#FFD700';
@@ -330,12 +341,26 @@ function showPreset(preset) {
 }
 
 // ── Basemaps ───────────────────────────────────────────────────────────────
+// Bing addresses tiles by quadkey rather than x/y, so it needs its own getTileUrl:
+// each zoom level contributes one base-4 digit encoding which quadrant the tile is in.
+const _BingLayer = L.TileLayer.extend({
+  getTileUrl(coords) {
+    let quadkey = '';
+    for (let i = coords.z; i > 0; i--) {
+      let digit = 0;
+      const mask = 1 << (i - 1);
+      if (coords.x & mask) digit++;
+      if (coords.y & mask) digit += 2;
+      quadkey += digit;
+    }
+    return `https://ecn.t3.tiles.virtualearth.net/tiles/a${quadkey}.jpeg?g=1`;
+  },
+});
+
+// Order and default deliberately mirror the Smokies planner, so the two sites feel like
+// the same tool. The USGS layers are Hullabaloo's own and sit at the bottom.
 // ArcGIS REST tiles order the path {z}/{y}/{x}, not {z}/{x}/{y}.
 const BASEMAPS = {
-  'USGS Topo': L.tileLayer('https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}',
-    { attribution: 'USGS The National Map', maxZoom: 16, zIndex: 1 }),
-  'USGS Imagery': L.tileLayer('https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}',
-    { attribution: 'USGS The National Map', maxZoom: 16, zIndex: 1 }),
   'OSM Grayscale': L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
     { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors', maxZoom: 19, zIndex: 1, className: 'grayscale-layer' }),
   'OSM Color': L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
@@ -344,9 +369,18 @@ const BASEMAPS = {
     { attribution: '&copy; OpenStreetMap contributors &copy; CARTO', maxZoom: 19, zIndex: 1 }),
   'CartoDB Dark': L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
     { attribution: '&copy; OpenStreetMap contributors &copy; CARTO', maxZoom: 19, zIndex: 1 }),
+  'Google Maps': L.tileLayer('https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}',
+    { attribution: '&copy; Google', maxZoom: 20, zIndex: 1 }),
+  'Bing Aerial': new _BingLayer('', { attribution: '&copy; Microsoft Bing', maxZoom: 19, zIndex: 1 }),
   'ESRI World Topo': L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
     { attribution: 'Tiles &copy; Esri', maxZoom: 19, zIndex: 1 }),
+  'USGS Topo': L.tileLayer('https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}',
+    { attribution: 'USGS The National Map', maxZoom: 16, zIndex: 1 }),
+  'USGS Imagery': L.tileLayer('https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}',
+    { attribution: 'USGS The National Map', maxZoom: 16, zIndex: 1 }),
 };
+
+const DEFAULT_BASEMAP = 'OSM Grayscale';
 
 // ── Data loading ───────────────────────────────────────────────────────────
 function presetFile(pace) {
@@ -405,8 +439,8 @@ async function loadPreset(pace) {
 document.addEventListener('DOMContentLoaded', () => {
   map = L.map('map').setView([37.2625, -80.4962], 14);
 
-  let activeBasemap = BASEMAPS['USGS Topo'].addTo(map);
-  activeBasemap.setOpacity(0.35);
+  let activeBasemap = BASEMAPS[DEFAULT_BASEMAP].addTo(map);
+  activeBasemap.setOpacity(+$('basemapOpacity').value / 100);
 
   let mapwarperLayer = null;
   if (MAPWARPER_ID) {
@@ -419,6 +453,18 @@ document.addEventListener('DOMContentLoaded', () => {
   } else {
     // No georeferenced sheet yet — hide its control rather than leave a dead slider.
     ['mapwarpLabel', 'mapwarpOpacity', 'opacityVal'].forEach(id => $(id).style.display = 'none');
+  }
+
+  let mapwarper2Layer = null;
+  if (MAPWARPER_ID_2) {
+    mapwarper2Layer = L.tileLayer(
+      `https://mapwarper.net/maps/tile/${MAPWARPER_ID_2}/{z}/{x}/{y}.png`,
+      { attribution: `Trail map p2 via <a href="https://mapwarper.net/maps/${MAPWARPER_ID_2}">MapWarper</a>`,
+        maxZoom: 19, maxNativeZoom: MAPWARPER_2_NATIVE_ZOOM,
+        opacity: +$('mapwarp2Opacity').value / 100, zIndex: 4, bounds: MAPWARPER_2_BOUNDS },
+    ).addTo(map);
+  } else {
+    document.querySelectorAll('.mapwarp2-ctl').forEach(el => el.style.display = 'none');
   }
 
   const hillshadeLayer = L.tileLayer(
@@ -485,6 +531,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (mapwarperLayer) mapwarperLayer.setOpacity(+this.value / 100);
     $('opacityVal').textContent = this.value + '%';
   });
+  $('mapwarp2Opacity').addEventListener('input', function () {
+    if (mapwarper2Layer) mapwarper2Layer.setOpacity(+this.value / 100);
+    $('opacity2Val').textContent = this.value + '%';
+  });
   $('hillshadeOpacity').addEventListener('input', function () {
     hillshadeLayer.setOpacity(+this.value / 100);
     $('hillshadeOpacityVal').textContent = this.value + '%';
@@ -512,9 +562,11 @@ document.addEventListener('DOMContentLoaded', () => {
     netGroup.eachLayer(l => l.setStyle && l.setStyle({ color: netColor }));
     $('legNet').style.background = netColor;
     $('btnDark').textContent = dark ? '☀️' : '🌙';
+    // Swap the light defaults for the dark one and back, but leave a deliberate pick
+    // like aerial or topo alone — someone who chose Bing Aerial meant it.
     const current = $('basemapSel').value;
     if (dark && (current === 'OSM Grayscale' || current === 'CartoDB Light')) setBasemap('CartoDB Dark');
-    else if (!dark && current === 'CartoDB Dark') setBasemap('USGS Topo');
+    else if (!dark && current === 'CartoDB Dark') setBasemap(DEFAULT_BASEMAP);
     localStorage.setItem('hullabalooTheme', dark ? 'dark' : 'light');
   }
   $('btnDark').addEventListener('click', () => applyTheme(!document.body.classList.contains('dark')));

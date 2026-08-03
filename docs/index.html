@@ -117,22 +117,29 @@
     <span id="mapwarpLabel">Trail Map</span>
     <input type="range" id="mapwarpOpacity" min="0" max="100" step="5" value="40">
     <span id="opacityVal">40%</span>
+    <span class="mapwarp2-ctl" style="margin:0 6px;color:var(--divider)">|</span>
+    <span class="mapwarp2-ctl" id="mapwarp2Label" title="Page 2 of the printed sheet, drawn at roughly 1:10000">Trail Map 2</span>
+    <input class="mapwarp2-ctl" type="range" id="mapwarp2Opacity" min="0" max="100" step="5" value="0">
+    <span class="mapwarp2-ctl" id="opacity2Val">0%</span>
     <span style="margin:0 6px;color:var(--divider)">|</span>
     <span>Hillshade</span>
     <input type="range" id="hillshadeOpacity" min="0" max="100" step="5" value="15">
     <span id="hillshadeOpacityVal">15%</span>
     <span style="margin:0 6px;color:var(--divider)">|</span>
     <span>Basemap</span>
-    <input type="range" id="basemapOpacity" min="0" max="100" step="5" value="35">
-    <span id="basemapOpacityVal">35%</span>
+    <input type="range" id="basemapOpacity" min="0" max="100" step="5" value="15">
+    <span id="basemapOpacityVal">15%</span>
+    <!-- Order matches the Smokies planner; the USGS layers are Hullabaloo's own. -->
     <select id="basemapSel" style="font-size:11px;border:1px solid var(--border);border-radius:3px;padding:2px 4px;cursor:pointer;margin-left:4px">
-      <option>USGS Topo</option>
-      <option>USGS Imagery</option>
       <option>OSM Grayscale</option>
       <option>OSM Color</option>
       <option>CartoDB Light</option>
       <option>CartoDB Dark</option>
+      <option>Google Maps</option>
+      <option>Bing Aerial</option>
       <option>ESRI World Topo</option>
+      <option>USGS Topo</option>
+      <option>USGS Imagery</option>
     </select>
     <button class="btn" id="btnDark" title="Toggle dark mode" style="margin-left:4px;padding:2px 8px">🌙</button>
   </div>
