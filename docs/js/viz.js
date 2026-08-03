@@ -43,6 +43,18 @@ function fmtHM(s) {
   return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}m`;
 }
 
+// Per-leg durations. No leg across any published pace comes close to an hour — the
+// longest is under 36 minutes — so hours would be a column of zeroes and seconds are
+// what actually distinguishes one short connector from another. The hour branch is
+// insurance for a slower pace factor being added later.
+function fmtMS(s) {
+  const total = Math.round(s);          // round before splitting, or 59.6s renders "0m 60s"
+  const minutes = Math.floor(total / 60), seconds = total % 60;
+  if (minutes < 60) return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
+  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}m `
+       + `${String(seconds).padStart(2, '0')}s`;
+}
+
 function fmtClock(s) {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
   return `${h}:${String(m).padStart(2, '0')}`;
@@ -91,7 +103,7 @@ function stepPopup(step) {
   const kind = step.cat === 'offtrail' ? (step.bushwhack ? 'bushwhack' : 'road') : tag;
   return `<b>${esc(step.name)}</b>${kind ? ` <i>(${kind})</i>` : ''}<br>` +
     `node ${step.from_node} → ${step.to_node}<br>` +
-    `${step.miles.toFixed(2)} mi &nbsp; ${fmtHM(step.seconds)}<br>` +
+    `${step.miles.toFixed(2)} mi &nbsp; ${fmtMS(step.seconds)}<br>` +
     `+${step.gain_ft} ft ↑ / −${step.loss_ft} ft ↓<br>` +
     `<small>step ${step.i} · ${fmtClock(step.cum.seconds)} elapsed · score ${step.cum.score.toFixed(2)}</small>`;
 }
@@ -199,7 +211,7 @@ function buildItinerary() {
       <b>${esc(s.name)}</b>${tag ? ` <span class="itin-tag">(${tag})</span>` : ''}
       ${done ? ` <span class="itin-done">✓ ${done.length} trail${done.length > 1 ? 's' : ''}</span>` : ''}
       <span class="itin-meta">
-        ${s.miles.toFixed(2)} mi &nbsp; ${fmtHM(s.seconds)} &nbsp; ${s.gain_ft} ft ↑ / ${s.loss_ft} ft ↓<br>
+        ${s.miles.toFixed(2)} mi &nbsp; ${fmtMS(s.seconds)} &nbsp; ${s.gain_ft} ft ↑ / ${s.loss_ft} ft ↓<br>
         ${fmtClock(s.cum.seconds)} elapsed &nbsp;·&nbsp; score ${s.cum.score.toFixed(2)}
       </span>
     </div>`;
@@ -227,18 +239,26 @@ function setStep(step) {
 
 function renderPresetInfo() {
   const t = PRESET.totals, solver = PRESET.solver || {};
-  const proven = solver.gap_pct === 0;
+  // Presets predating the optimality block fall back to the raw solver gap.
+  const opt = PRESET.optimality || { caps_binding: [], proven: solver.gap_pct === 0, note: null };
+
+  let claim;
+  if (opt.caps_binding.length) claim = '';   // the caveat below says it instead
+  else if (opt.proven) claim = ' Proven optimal by the MILP — no better route exists at this pace.';
+  else if (solver.gap_pct != null) claim = ` Within ${solver.gap_pct.toFixed(1)}% of a proven upper bound.`;
+  else claim = '';
+
   $('presetInfo').innerHTML =
     `<div class="info-row"><span>Score</span><span><b>${t.score.toFixed(2)}</b></span></div>` +
     `<div class="info-row"><span>Trails completed</span><span><b>${t.trails_completed}</b></span></div>` +
     `<div class="info-row"><span>Unique miles</span><span><b>${t.unique_miles.toFixed(2)}</b></span></div>` +
     `<div class="info-row"><span>Distance walked</span><span><b>${t.walked_miles.toFixed(2)} mi</b></span></div>` +
     `<div class="info-row"><span>Finish time</span><span><b>${fmtClock(t.time_s)}</b></span></div>` +
-    `<span class="info-note">Score = trails completed + unique miles.` +
-    (proven ? ' Proven optimal by the MILP — no better route exists at this pace.'
-            : solver.gap_pct != null
-              ? ` Within ${solver.gap_pct.toFixed(1)}% of a proven upper bound.` : '') +
-    `</span>`;
+    `<span class="info-note">Score = trails completed + unique miles.${claim}</span>` +
+    (opt.caps_binding.length
+      ? `<div class="caveat"><b>⚠ Not proven optimal</b><br>` +
+        `${opt.caps_binding.map(esc).join('; ')}. ${esc(opt.note || '')}</div>`
+      : '');
 }
 
 function showPreset(preset) {

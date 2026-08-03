@@ -190,30 +190,37 @@ def preset_dict(
     depot = net.nodes.loc[net.nodes["node_id"] == net.depot]
     start = gpd.GeoSeries(depot.geometry.values, crs=net.nodes.crs).to_crs(CRS_GEOGRAPHIC)
 
+    totals = {
+        "score": summary["score"],
+        "unique_miles": summary["unique_miles"],
+        "trails_completed": summary["trails_completed"],
+        "walked_miles": float(summary["walked_miles"]),
+        # Recomputed from the walk rather than taken from Route.evaluate(): the step
+        # categories fold roads in with bushwhacks and count a re-walked connector as a
+        # repeat, so these are the numbers the sidebar's rows actually add up to.
+        "offtrail_miles": round(cum["offtrail_miles"], 3),
+        "repeat_miles": round(cum["repeat_miles"], 3),
+        "time_s": round(float(route.time_s), 1),
+        "n_steps": len(steps),
+        "feasible": bool(summary["feasible"]),
+    }
+    race_block = {
+        "time_budget_s": float(race.time_budget_s),
+        "start_latlng": [
+            round(float(start.iloc[0].y), 6),
+            round(float(start.iloc[0].x), 6),
+        ],
+        # Published so the page and check_preset can both see whether a cap binds.
+        "max_mile_points": float(race.max_mile_points),
+        "max_trail_points": float(race.max_trail_points),
+    }
+
     return {
         "schema_version": SCHEMA_VERSION,
         "pace_factor": round(float(pace_factor), 2),
-        "race": {
-            "time_budget_s": float(race.time_budget_s),
-            "start_latlng": [
-                round(float(start.iloc[0].y), 6),
-                round(float(start.iloc[0].x), 6),
-            ],
-        },
-        "totals": {
-            "score": summary["score"],
-            "unique_miles": summary["unique_miles"],
-            "trails_completed": summary["trails_completed"],
-            "walked_miles": float(summary["walked_miles"]),
-            # Recomputed from the walk rather than taken from Route.evaluate(): the step
-            # categories fold roads in with bushwhacks and count a re-walked connector as
-            # a repeat, so these are the numbers the sidebar's rows actually add up to.
-            "offtrail_miles": round(cum["offtrail_miles"], 3),
-            "repeat_miles": round(cum["repeat_miles"], 3),
-            "time_s": round(float(route.time_s), 1),
-            "n_steps": len(steps),
-            "feasible": bool(summary["feasible"]),
-        },
+        "race": race_block,
+        "totals": totals,
+        "optimality": optimality_block(totals, solver or {}, race_block),
         "network": {
             "total_miles": round(sum(net.edge_score_mi.values()), 2),
             "n_trails": net.n_trails,
@@ -337,6 +344,77 @@ def check_preset(document: dict, *, tol: float = 0.02) -> None:
     if failures:
         raise ValueError(f"preset failed its self-checks: {'; '.join(failures)}")
 
+    # A binding cap does not disqualify a route — it is still a real walk inside the
+    # budget — but it must never be published still claiming to be proven optimal.
+    optimality = document.get("optimality")
+    if optimality is not None:
+        expected = caps_binding(totals, document.get("race"))
+        if optimality["caps_binding"] != expected:
+            raise ValueError(
+                f"optimality.caps_binding {optimality['caps_binding']} disagrees with the "
+                f"totals, which give {expected}"
+            )
+        if expected and optimality["proven"]:
+            raise ValueError(
+                "preset claims proven optimality while a scoring cap binds — the MILP's "
+                "uncapped objective cannot prove optimality under the real scoring rule"
+            )
+
     for step in steps:
         if not step["geometry"]:
             raise ValueError(f"step {step['i']} ({step['name']}) has no geometry")
+
+
+def caps_binding(totals: dict, race_block: dict | None = None) -> list[str]:
+    """Which 40-point scoring caps this route reaches, if any.
+
+    Scoring is ``min(trails, 40) + min(unique_miles, 40)``, but a minimum is not linear,
+    so the MILP maximizes the *uncapped* sum instead. That substitution is free only
+    while neither cap binds, and the argument is made on the answer rather than in
+    advance:
+
+        The uncapped objective U dominates the true score S everywhere. If the returned
+        optimum x* has fewer than 40 trails and under 40 unique miles then S(x*) = U(x*),
+        and for any other route x, S(x) <= U(x) <= U(x*) = S(x*). So x* is optimal under
+        the real scoring too.
+
+    Reach a cap and that chain breaks. The route is still perfectly valid — it is a real
+    walk inside the time budget, and it still scores what it scores — but the solver was
+    rewarded for mileage the organizer does not pay for, so "proven optimal" would be a
+    claim about a different race. Once a cap binds the interesting objective changes
+    shape entirely: the fastest tour that still collects the cap, which is a
+    minimum-duration problem this model does not express.
+
+    This starts to matter from a pace factor of about 1.53, where the distance ceiling in
+    :func:`optimize_milp.check_caps_nonbinding` first exceeds 40 miles.
+    """
+    # The caps describe the race, not the solve, so a preset written before they were
+    # published is still governed by them.
+    race_block = race_block or {}
+    mile_cap = race_block.get("max_mile_points", CONFIG.race.max_mile_points)
+    trail_cap = race_block.get("max_trail_points", CONFIG.race.max_trail_points)
+
+    binding = []
+    if totals["unique_miles"] >= mile_cap:
+        binding.append(f"unique miles ({totals['unique_miles']:.2f}) reach the {mile_cap:.0f}-point cap")
+    if totals["trails_completed"] >= trail_cap:
+        binding.append(f"trails completed ({totals['trails_completed']}) reach the {trail_cap:.0f}-point cap")
+    return binding
+
+
+CAPPED_NOTE = (
+    "This route reaches a scoring cap, so points stop accruing before the clock runs "
+    "out. The real objective past that point is the *fastest* tour that still collects "
+    "the cap — a minimum-duration problem this solver does not express, so the "
+    "itinerary below is valid and inside the time budget but is not proven optimal."
+)
+
+
+def optimality_block(totals: dict, solver: dict, race_block: dict | None = None) -> dict:
+    """Whether this itinerary's optimality claim survives the scoring caps."""
+    binding = caps_binding(totals, race_block)
+    return {
+        "caps_binding": binding,
+        "proven": not binding and solver.get("gap_pct") == 0,
+        "note": CAPPED_NOTE if binding else None,
+    }

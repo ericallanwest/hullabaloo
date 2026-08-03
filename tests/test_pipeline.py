@@ -550,6 +550,69 @@ def test_preset_filename_matches_the_front_end():
     assert preset_filename(1.35) == "preset_p135.json"
 
 
+def test_cap_ceiling_scales_with_pace(net):
+    """Regression: the ceiling was read off ``CONFIG.tobler`` regardless of the pace the
+    network was actually priced at, so every pace reported the same answer.
+
+    It matters because ``base_kmh x pace x budget`` crosses the 40-mile cap at a pace
+    factor of about 1.53. A sweep running past that would have kept reporting the global
+    default's comfortable 35.23 mi ceiling and silently vindicated a cap that had stopped
+    being safe.
+    """
+    from hullabaloo.optimize_milp import check_caps_nonbinding
+
+    slow = check_caps_nonbinding(net, tobler=dataclasses.replace(CONFIG.tobler, pace_factor=1.0))
+    fast = check_caps_nonbinding(net, tobler=dataclasses.replace(CONFIG.tobler, pace_factor=2.0))
+
+    assert fast["distance_ceiling_mi"] > slow["distance_ceiling_mi"]
+    assert fast["distance_ceiling_mi"] == pytest.approx(2 * slow["distance_ceiling_mi"], rel=1e-6)
+    assert slow["safe_to_omit_caps"]
+    assert not fast["safe_to_omit_caps"], "a 2.0 pace factor must defeat the a-priori argument"
+
+
+def test_a_binding_scoring_cap_is_published_but_never_called_optimal():
+    """Past pace ~1.53 the a-priori ceiling no longer rules the caps out, so the argument
+    moves to the answer.
+
+    A capped route is still a real walk inside the time budget and is still worth
+    publishing — the racer wants the itinerary either way. What it must never do is keep
+    claiming proven optimality, because past a cap the meaningful objective becomes the
+    *fastest* tour that still collects it, which this model does not express.
+    """
+    import copy
+    import json
+
+    from hullabaloo import webexport
+
+    presets = sorted(webexport.WEB_DATA.glob("preset_p*.json"))
+    if not presets:
+        pytest.skip("no presets published yet")
+
+    document = json.loads(presets[-1].read_text(encoding="utf-8"))
+    webexport.check_preset(document)
+
+    for field, total in (("max_mile_points", "unique_miles"),
+                         ("max_trail_points", "trails_completed")):
+        capped = copy.deepcopy(document)
+        capped["race"][field] = capped["totals"][total]  # cap now exactly binds
+
+        binding = webexport.caps_binding(capped["totals"], capped["race"])
+        assert binding, f"tightening {field} should bind"
+
+        capped["optimality"] = webexport.optimality_block(
+            capped["totals"], capped.get("solver", {}), capped["race"]
+        )
+        assert not capped["optimality"]["proven"]
+        assert capped["optimality"]["note"]
+        webexport.check_preset(capped)  # still publishable, just carrying the caveat
+
+        # But a document that binds a cap *and* still claims optimality must be rejected.
+        lying = copy.deepcopy(capped)
+        lying["optimality"]["proven"] = True
+        with pytest.raises(ValueError, match="proven optimality while a scoring cap binds"):
+            webexport.check_preset(lying)
+
+
 def test_published_presets_still_reconcile():
     """Guard the committed artifacts themselves: the site is static, so a stale or
     hand-edited preset would be served to readers with nothing to catch it."""

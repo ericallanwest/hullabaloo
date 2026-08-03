@@ -107,6 +107,13 @@ body.sidebar-hidden #sidebar-toggle { right: 0; }
 #presetInfo .info-row b { color: var(--text); }
 #presetInfo .info-note { display: block; margin-top: 10px; line-height: 1.5; font-size: 10px; }
 #presetError { margin-top: 8px; font-size: 11px; color: var(--accent); display: none; }
+/* Shown when a scoring cap binds: the route is valid but the optimality claim is not. */
+.caveat {
+  margin-top: 10px; padding: 7px 9px; border-radius: 4px;
+  border-left: 3px solid var(--accent); background: var(--active-bg);
+  font-size: 10px; line-height: 1.5; color: var(--text);
+}
+.caveat b { color: var(--accent); }
 
 /* ── Right sidebar: race stats ────────────────────────────────────────────── */
 /* The stats count up as you step, so they stay pinned while the itinerary below

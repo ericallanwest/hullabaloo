@@ -44,7 +44,7 @@ from pathlib import Path
 
 import pulp
 
-from .config import CONFIG, OUTPUTS, RaceParams
+from .config import CONFIG, OUTPUTS, RaceParams, ToblerParams
 from .graph import Arc, Network, Route
 
 log = logging.getLogger(__name__)
@@ -77,7 +77,9 @@ class MILPResult:
         }
 
 
-def check_caps_nonbinding(net: Network, race: RaceParams | None = None) -> dict:
+def check_caps_nonbinding(
+    net: Network, race: RaceParams | None = None, tobler: ToblerParams | None = None
+) -> dict:
     """Prove the 40-point category caps cannot bind, so omitting them is sound.
 
     The trail cap is trivially safe (there are exactly 40 trails). The mile cap needs an
@@ -85,13 +87,25 @@ def check_caps_nonbinding(net: Network, race: RaceParams | None = None) -> dict:
     The argument: no one can move faster than Tobler's peak speed, so ``budget x peak
     speed`` is a hard ceiling on distance covered. If that ceiling is under 40 miles, the
     cap is unreachable and dropping it from the model changes nothing.
+
+    ``tobler`` must be the parameters the network was actually priced with. The ceiling
+    is ``base_kmh x pace_factor x budget``, so it scales with pace and crosses 40 miles
+    at a pace factor of about 1.53 — reading the ceiling off the global default while
+    solving a faster racer would silently vindicate a cap that has stopped being safe.
+
+    Note the ceiling is deliberately loose: it assumes seven unbroken hours at peak
+    downhill speed. A run whose ceiling exceeds the cap is not necessarily wrong, it just
+    means the argument has to be made on the solution instead — see
+    :func:`webexport.check_preset`, which rejects any published route that actually
+    reaches a cap.
     """
     from .tobler import tobler_speed_kmh
 
     race = race or CONFIG.race
+    tobler = tobler or CONFIG.tobler
     total_mi = sum(net.edge_score_mi.values())
 
-    peak_kmh = float(tobler_speed_kmh(-CONFIG.tobler.s0, CONFIG.tobler))
+    peak_kmh = float(tobler_speed_kmh(-tobler.s0, tobler))
     ceiling_mi = peak_kmh * (race.time_budget_s / 3600.0) * 0.621371
 
     return {

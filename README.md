@@ -86,7 +86,32 @@ JavaScript is a renderer and nothing more. `write_preset` refuses to publish an 
 whose numbers do not reconcile, since a static file is trusted by readers who will never
 run the solver.
 
-One subtlety worth naming: the sweep re-times the bushwhack connectors as well as the
+### Where "proven optimal" stops being true
+
+Scoring is `min(trails, 40) + min(unique_miles, 40)`, but a minimum is not linear, so the
+MILP maximizes the *uncapped* sum. That substitution is free only while neither cap binds,
+and the usual argument for it is a speed limit: nobody beats Tobler's peak, so
+`peak_speed x 7 h` bounds the distance covered. At the shipped pace of 1.35 that ceiling is
+35.2 miles, comfortably under the 40-mile cap.
+
+The ceiling scales with pace, and it crosses 40 miles at a pace factor of **1.53** — so
+the a-priori argument simply expires partway up the sweep. Past that the case has to be
+made on the answer instead, which is easy: the uncapped objective `U` dominates the true
+score `S` everywhere, so if the returned optimum uses under 40 miles and under 40 trails
+then `S = U` there, and `S(x) <= U(x) <= U(x*) = S(x*)` for every other route. The optimum
+of the relaxation is the optimum of the real thing.
+
+When a cap does bind, the itinerary is still published — it is a real walk inside the time
+budget and a racer wants it either way — but it is labelled **not proven optimal** in the
+sidebar rather than quietly keeping a claim it no longer supports. `check_preset` rejects
+any preset that binds a cap while still asserting optimality.
+
+The honest reading of that regime is that the question has changed. Once points stop
+accruing, the interesting objective is no longer "score the most" but "collect the cap
+*fastest*" — a minimum-duration tour, which is a different problem this model does not
+express. Solving it properly is future work.
+
+One further subtlety: the sweep re-times the bushwhack connectors as well as the
 trails. `build_network` reads connector times straight off the connector table, so
 re-pricing only the trails would leave every bushwhack frozen at the pace that built the
 file — a mixed-pace model that still solves cleanly and looks entirely plausible. Because a
