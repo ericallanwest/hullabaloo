@@ -75,12 +75,13 @@ def _(mo):
         score, both capped at 40 points:
 
         * **1 point per trail** you complete end to end (40 trails exist)
-        * **1 point per unique mile** of trail you cover (39.7 miles exist)
+        * **1 point per unique mile** of trail you cover (39.7 by the organizer's sheet,
+          40.16 measured)
 
-        The whole network is 40.1 miles and takes **14.3 hours** to cover. You have
-        **7**. So this is not a coverage problem — it is a *prize-collecting arc routing*
-        problem, and the interesting question is which 45% of the network to spend your
-        day on.
+        The whole network is 40.16 miles and takes **10.6 hours** to cover at the shipped
+        pace. You have **7**. So this is not a coverage problem — it is a *prize-collecting
+        arc routing* problem, and the interesting question is which 55% of the network to
+        spend your day on.
         """
     )
     return

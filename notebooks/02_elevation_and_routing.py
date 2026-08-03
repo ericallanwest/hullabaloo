@@ -287,9 +287,9 @@ def _(mo):
 
         The heuristic finds good routes in seconds. It cannot tell you how good. So the
         same problem is also written as a MILP and handed to HiGHS — and at this size the
-        solver does better than bound the problem, it **closes** it: gap 0.00% in 181 s,
-        proving no 7-hour route scores above **35.37**. The heuristic's 35.249 turns out
-        to be within **0.34%** of that.
+        solver does better than bound the problem, it **closes** it: gap 0.00% in 65 s,
+        proving no 7-hour route scores above **48.23**. The heuristic's 47.889 turns out
+        to be within **0.7%** of that.
 
         The MILP needs one constraint that is easy to forget: **connectivity**. Flow
         conservation alone is satisfied by any collection of disjoint circuits, so without

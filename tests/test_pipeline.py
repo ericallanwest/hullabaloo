@@ -184,12 +184,12 @@ def test_adding_the_depot_never_destroys_edges():
     with patch.object(topo, "START_LON", lon), patch.object(topo, "START_LAT", lat):
         edges, nodes, depot = topo.build_network(trails, add_depot=True)
 
-    # One edge becomes two (+1) and the depot access edge is added (+1).
+    # One edge becomes two (+1) and the start/finish link is added (+1).
     assert len(edges) == len(plain_edges) + 2
     assert len(nodes) == len(plain_nodes) + 2
     assert edges["edge_id"].is_unique
     assert nodes["node_id"].is_unique
-    access = edges[edges["name"] == "depot access"]
+    access = edges[edges["name"] == topo.DEPOT_EDGE_NAME]
     assert len(access) == 1
     # Gravel or paved on the ground, so full speed: it scores nothing because it carries
     # no trail_id, which is a separate question from how fast it is walked.

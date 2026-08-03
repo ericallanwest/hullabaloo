@@ -174,7 +174,7 @@ def leg_label(row) -> str:
 
     This used to print "BUSHWHACK" for anything off-trail, because generated connectors
     carried machine names like ``bushwhack 12-34`` that meant nothing to a racer. Those
-    are gone, and the only off-trail edge left is the ``depot access`` link from the start
+    are gone, and the only generated edge left is the ``Start/Finish`` link from the start
     line to the network — which has a perfectly good name of its own.
     """
     return row.name

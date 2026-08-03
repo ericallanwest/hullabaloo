@@ -46,6 +46,12 @@ log = logging.getLogger(__name__)
 
 DEPOT_NODE_NAME = "START_FINISH"
 
+#: Label for the short link joining the start line to the nearest network node. It reaches
+#: the itinerary verbatim, so it is written for a racer reading the route rather than for
+#: the model that built it — "depot" is vehicle-routing vocabulary and means nothing on the
+#: ground. Every route walks this edge exactly twice, out and back.
+DEPOT_EDGE_NAME = "Start/Finish"
+
 
 # --------------------------------------------------------------------------------------
 # Union-find, for clustering coincident endpoints into nodes
@@ -405,7 +411,7 @@ def _add_depot(
         {
             "edge_id": max_edge_id + 1,
             "trail_id": pd.NA,
-            "name": "depot access",
+            "name": DEPOT_EDGE_NAME,
             "seq": 0,
             "length_m": access.length,
             # Gravel or paved on the ground, so it is walked at full speed. It was

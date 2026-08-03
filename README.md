@@ -6,14 +6,16 @@ the Pandapas Pond / Poverty Creek trail network near Blacksburg, Virginia.
 You get 7 hours. You score two ways, each capped at 40 points:
 
 - **1 point per trail** completed end to end — there are 40 trails
-- **1 point per unique mile** of trail covered — there are 39.7 miles
+- **1 point per unique mile** of trail covered — the organizer's sheet totals 39.7, and
+  measuring the tracks puts it at 40.16
 
-Covering the entire network would score a perfect 80. It would also take **14.3 hours** —
-and that is a lower bound that ignores all the backtracking a real closed loop forces. With
-7 hours the best possible is 35.37, or **44% of a perfect score**, covering 15.4 of the
-40.1 miles. The whole game is deciding *which* miles. That makes this a **prize-collecting
-arc routing problem**: points sit on edges rather than nodes, re-walking an edge earns
-nothing the second time, and the tour must start and finish at the trailhead.
+Covering the entire network would score a perfect 80. It would also take **10.6 hours** at
+the shipped pace — and that is a lower bound that walks every edge in its cheaper direction
+and ignores all the backtracking a real closed loop forces. With 7 hours the best possible
+is 48.23, or **60% of a perfect score**, covering 22.2 of the 40.16 miles. The whole game is
+deciding *which* miles. That makes this a **prize-collecting arc routing problem**: points
+sit on edges rather than nodes, re-walking an edge earns nothing the second time, and the
+tour must start and finish at the trailhead.
 
 ![optimized route](outputs/route_map.png)
 
@@ -21,25 +23,31 @@ nothing the second time, and the tour must start and finish at the trailhead.
 
 | | score | trails | unique miles | time |
 |---|---|---|---|---|
-| greedy nearest-trail baseline | 26.42 | 16 | 10.42 | 6.36 h |
-| greedy best-ratio baseline | 24.06 | 13 | 11.06 | 6.10 h |
-| ALNS (6 seeds × 500 iterations) | 35.25 | 20 | 15.25 | 6.99 h |
-| **MILP — proven optimal** | **35.37** | **20** | **15.37** | **7.00 h** |
+| greedy nearest-trail baseline | 42.15 | 23 | 19.15 | 6.98 h |
+| greedy best-ratio baseline | 37.01 | 20 | 17.01 | 6.17 h |
+| ALNS (6 seeds × 500 iterations) | 47.89 | 26 | 21.89 | 7.00 h |
+| **MILP — proven optimal** | **48.23** | **26** | **22.23** | **7.00 h** |
 
 **The problem is solved to proven global optimality.** HiGHS closed the gap to 0.00% in
-181 s: no 7-hour route scores better than **35.37**. That is a **34% improvement** over a
-sensible greedy baseline, and the route uses the full budget to the second.
+65 s: no 7-hour route scores better than **48.23**, and the route uses the full budget to
+the second.
 
-The heuristic is not wasted — it reached 35.249, **within 0.34%** of the optimum, in a few
-minutes, and its incumbent is fed to the solver as a valid primal cut that prunes the
-search hard. Three of six seeds landed ≥35.0, so the search finds the right basin
-reliably rather than getting lucky.
+That is a **14% improvement** over a sensible greedy baseline — a much narrower margin than
+this project reported before the forest roads went in, and the narrowing is real rather than
+a regression. Roads help the greedy walker too: the baseline climbed from 26.42 to 42.15
+once it could move between trail clusters at full speed. An optimizer's advantage is largest
+on a network where the obvious move is often wrong, and the roads made a lot of obvious
+moves right.
 
-Worth noting how the heuristic gets there: its solution encoding *targets* only 14 trails,
-yet the decoded route *completes* 20. The extra six are collected for free on deadhead legs
+The heuristic is not wasted — it reached 47.889, **within 0.7%** of the optimum, in a few
+minutes, and its incumbent is fed to the solver as a valid primal cut that prunes the search
+hard.
+
+Worth noting how the heuristic gets there: its solution encoding *targets* only 18 trails,
+yet the decoded route *completes* 26. The extra eight are collected for free on deadhead legs
 between targets — which is exactly why the evaluator credits every edge the walk touches
 rather than only the ones it set out to collect. Scoring solely the targeted trails would
-have thrown away six points.
+have thrown away eight points.
 
 See [`outputs/run_report.json`](outputs/run_report.json) for the exact figures.
 
@@ -67,10 +75,17 @@ constants describe unhurried walking, and how much quicker a fit competitor actu
 is a guess. Sweeping it shows how much the plan depends on that guess.
 
 Underneath sits the printed **tanZnavigation Pandapas Pond sheet**, georeferenced on
-[MapWarper](https://mapwarper.net/maps/110238) and faded in over USGS topo, imagery or
-hillshade. It is the map racers actually carry, so it is the one worth checking a route
-against — a line that looks reasonable on a DEM can still cross something the paper map
-knows about.
+MapWarper and faded in over any of nine basemaps. It is the map racers actually carry, so it
+is the one worth checking a route against — a line that looks reasonable on a DEM can still
+cross something the paper map knows about.
+
+Both printed pages are there, on independent sliders:
+[page 1](https://mapwarper.net/maps/110238) at roughly 1:20000 covering the whole area, and
+[page 2](https://mapwarper.net/maps/110277) — McDonald / Stonecutter Hollow — at 1:10000.
+They need no cross-fading or zoom switching to coexist, because each layer is bounded to its
+own sheet extent: page 2 stacks above page 1 and paints only where it has coverage,
+revealing page 1 everywhere else. Page 2 also gets one more native zoom level, since the
+same size scan covers about a quarter of the ground.
 
 Each itinerary is solved independently and shipped as JSON:
 
@@ -249,15 +264,43 @@ from NHD hydrography; an earlier flatness-based fallback flagged **20% of the ma
 water, so the code rejects any fallback claiming more than 2% rather than quietly letting
 routes swim.
 
-Together these took bushwhack candidates from **128 to 4**, and re-solving at pace 1.0,
-1.5 and 2.0 used **none of them**. The off-trail model was removed.
+Together these took bushwhack candidates from **128 to 4**, and re-solving **all eleven
+paces** used none of them. That was the condition for deleting the off-trail model, checked
+rather than assumed: had a single route still wanted a bushwhack, the stage would have
+stayed. `build_presets` now asserts it, so a preset that needs one cannot ship quietly.
 
-Nothing in the network is off-trail any more. The short `depot access` link from the start
+Scores rose at every pace — 37.33 at 1.0 and 65.40 at 2.0, against 36.40 and 64.83 before —
+which is the direction the change predicts. Ground that used to cost the 60% off-trail
+penalty is now walked at full speed, and the freed time buys more trail.
+
+Nothing in the network is off-trail any more. The short `Start/Finish` link from the start
 line was the last thing modelled that way, and it is gravel or paved on the ground, so it
 is walked at full speed too. It was only marked off-trail because it is not one of the 40
 scored trails — but that is a question about *points*, and points are already withheld by
 `score_mi`. Pace and scoring are independent, and conflating them cost the model a 40%
 speed penalty on ground that deserves none.
+
+### Removing ground the race never touches
+
+With the roads settled, three OSM ways turned out to be used by no route at any pace: `Woods
+& Field` north of Glade Road, a `Poverty Creek Connector` that is a user-created trail the
+Forest Service discourages, and the arm of Meadowbrook Drive running out to Glade Road.
+
+Dropping them is provably lossless, which is worth spelling out because it is the sort of
+claim that usually isn't. The previously-optimal route uses none of the removed edges, so it
+stays feasible and the new optimum cannot be lower; and the pruned feasible set is a subset
+of the original, so it cannot be higher. Equal, necessarily.
+
+What that argument does *not* cover is its own premise — that pruning removed exactly those
+three and nothing else. Node numbering shifts, and the topology stage runs its own orphan
+pass, so a segment orphaned *because* of the pruning would be a silent fourth deletion. That
+is what re-solving all eleven paces afterwards actually verifies.
+
+The denylist is keyed by OSM way id rather than name, for two independent reasons. `Forest
+road` is a fallback label this code invents for unnamed tracks and currently covers twelve
+distinct ways, so a name cannot identify one. And Meadowbrook Drive arrives as two ways of
+which one is load-bearing — a name-based rule would delete the road the whole import exists
+to add.
 
 ### The bug that only aerial imagery could catch
 
@@ -406,9 +449,14 @@ Working CRS is **EPSG:6346** (NAD83(2011) / UTM 17N, metres), matching the lidar
   the plan is only as good as the road data, and OSM tags are an imperfect guide to what
   can actually be walked.
 - **The lidar is 2016/17 vintage** and predates any recent trail work.
-- **The three components may be joined by forest roads absent from the dataset.** Worth
-  checking the gaps against imagery; a real road should be added as a full-speed connector
-  rather than a 60% bushwhack.
+- **More walkable ground may still be missing from OSM.** The two ways that removed the
+  last bushwhack were found by asking why the optimizer wanted to leave the trail at one
+  specific place, which is a diagnostic that only fires when something is *badly* missing.
+  A road the routes would merely have preferred leaves no such trace.
+- **Four unnamed `Forest road` ways are carried but unused** by every route at every pace.
+  They stay in because identifying them needs local knowledge the data does not carry —
+  which of them are legitimate connectors and which are user-created trails a land manager
+  discourages. Keeping an unused edge costs nothing; deleting a legitimate one costs a route.
 - **Scoring is interpreted** as fractional miles plus whole trails. It is isolated in one
   `score_edges` function, so an alternate reading is a one-line change.
 
