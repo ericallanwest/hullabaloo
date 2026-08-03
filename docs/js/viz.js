@@ -181,11 +181,13 @@ function renderStep(step) {
 function updateSidebar(step) {
   const s = PRESET.steps[step - 1];
   const cum = s.cum;
-  const budget = PRESET.race.time_budget_s;
 
   $('sbHeader').textContent = `Step ${step} of ${PRESET.totals.n_steps}`;
-  $('sbClock').textContent =
-    `${fmtClock(cum.seconds)} elapsed of ${fmtClock(budget)} · ${esc(s.name)}`;
+  // Wall clock rather than elapsed: the itinerary below shows both, and what a racer
+  // standing on the trail wants from the headline is the time on their watch.
+  // No escaping needed — textContent never parses markup, and escaping here would
+  // render an ampersand in a trail name as a literal "&amp;".
+  $('sbClock').textContent = `${fmtTimeOfDay(cum.seconds)} · ${s.name}`;
 
   const run = cumThrough(step);
   $('sbTotal').textContent  = `${cum.miles.toFixed(1)} mi / ${fmtHM(cum.seconds)}`;
