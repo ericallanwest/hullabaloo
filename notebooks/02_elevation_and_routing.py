@@ -195,17 +195,36 @@ def _(mo):
         The network is in three pieces, so off-trail travel is mandatory. Connectors are
         least-cost paths over a Tobler-derived cost surface run at 60% speed.
 
-        Two things to be explicit about:
+        Three things to be explicit about:
 
         * **Water is masked.** Pandapas Pond sits in the middle of the study area. NHD
           hydrography contributes 4.7 ha of impassable cells. An earlier flatness-based
           heuristic flagged **20% of the map** as water, so the code now rejects any
           fallback mask that claims more than 2% of the area rather than quietly warping
           every connector.
+        * **Developed land is masked too** — and that one took aerial imagery to find.
         * **`MCP_Geometric` is isotropic.** It prices cells by slope *magnitude*, so path
           *selection* treats up and down alike. We compensate by re-integrating true
           directional Tobler time along the returned polyline, which restores asymmetry
           in the routing graph. `MCP_Flexible` is the fully anisotropic upgrade.
+
+        ### The bug no automated check could catch
+
+        Every check passed. Connectors avoided water, respected slope limits, ran at a
+        plausible 0.56x on-trail speed. Then drawing them on USGS aerial imagery showed
+        the optimal route's longest bushwhack running **848 m through a residential
+        neighbourhood** — houses, driveways, lawns, a swimming pool.
+
+        The cause is structural rather than a coding error. The cost surface comes from a
+        **bare-earth** DEM: terrain with buildings and vegetation stripped out by
+        definition. Where the houses are, it sees gentle, inviting slope. No amount of
+        slope or hydrography validation finds this, because the input does not contain
+        the information.
+
+        The fix is NLCD land cover with developed classes (21-24) impassable — 5.4% of the
+        study area. The route loses **0.057 points**. The illegal shortcut was worth almost
+        nothing; it was simply invisible to every check that did not involve looking at a
+        photograph.
         """
     )
     return

@@ -137,13 +137,23 @@ def run(
 
     report["final_route"] = route.evaluate()
 
-    _stage("7 - exports")
-    written = export.export_all(net, route)
-    report["outputs"] = {k: str(v) for k, v in written.items()}
-    report["elapsed_s"] = round(time.time() - started, 1)
+    # Persist the results BEFORE exporting. The optimization is the expensive part — a
+    # locked output file must never be able to discard a finished run's numbers.
+    def _save_report() -> None:
+        report["elapsed_s"] = round(time.time() - started, 1)
+        (OUTPUTS / "run_report.json").write_text(json.dumps(report, indent=2, default=str))
 
-    (OUTPUTS / "run_report.json").write_text(json.dumps(report, indent=2, default=str))
-    log.info("wrote %s", OUTPUTS / "run_report.json")
+    _save_report()
+    log.info("saved results to %s", OUTPUTS / "run_report.json")
+
+    _stage("7 - exports")
+    try:
+        written = export.export_all(net, route)
+        report["outputs"] = {k: str(v) for k, v in written.items()}
+    except Exception as exc:  # noqa: BLE001
+        report["export_error"] = f"{exc.__class__.__name__}: {exc}"
+        log.error("export stage failed (%s) — results above are still saved", exc)
+    _save_report()
     return report
 
 

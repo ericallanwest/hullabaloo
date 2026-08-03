@@ -168,11 +168,13 @@ def _split_trails(
                 continue
             records.append(
                 {
-                    "trail_id": tid,
+                    # None for roads: they cost time but score nothing.
+                    "trail_id": meta[tid]["trail_id"],
                     "name": meta[tid]["name"],
                     "seq": seq,
                     "length_m": piece.length,
-                    "off_trail": False,
+                    "off_trail": False,  # roads are walked at full speed
+                    "is_road": meta[tid]["trail_id"] is None,
                     "geometry": piece,
                 }
             )
@@ -249,6 +251,44 @@ def _drop_degenerate(edges: gpd.GeoDataFrame, tol: float) -> gpd.GeoDataFrame:
             100 * lost_m / max(float(edges["length_m"].sum()), 1e-9),
         )
     return edges.loc[~degenerate].reset_index(drop=True)
+
+
+def _prune_orphan_roads(
+    edges: gpd.GeoDataFrame, nodes: gpd.GeoDataFrame
+) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+    """Drop road fragments that touch no trail, and re-index nodes compactly.
+
+    Clipping the road layer to a buffer around the trails inevitably leaves a few short
+    stubs floating free. They can never be used by a route, but they inflate the arc count
+    and show up as spurious extra components.
+    """
+    comp = connected_components(edges, len(nodes))
+    trail_comps = {
+        comp[int(u)] for u, tid in zip(edges["u"], edges["trail_id"]) if pd.notna(tid)
+    }
+    keep = np.array([comp[int(u)] in trail_comps for u in edges["u"]])
+    if keep.all():
+        return edges, nodes
+
+    dropped = edges.loc[~keep]
+    log.info(
+        "pruned %d orphan road segment(s), %.2f mi, touching no trail",
+        len(dropped),
+        dropped["length_m"].sum() / M_PER_MILE,
+    )
+    edges = edges.loc[keep].reset_index(drop=True)
+
+    used = sorted(set(edges["u"]) | set(edges["v"]))
+    remap = {old: new for new, old in enumerate(used)}
+    edges["u"] = edges["u"].map(remap)
+    edges["v"] = edges["v"].map(remap)
+    nodes = (
+        nodes[nodes["node_id"].isin(used)]
+        .assign(node_id=lambda d: d["node_id"].map(remap))
+        .sort_values("node_id")
+        .reset_index(drop=True)
+    )
+    return edges, nodes
 
 
 def junctions_in_band(
@@ -346,6 +386,7 @@ def _add_depot(
                     "seq": nearest["seq"],
                     "length_m": geom.length,
                     "off_trail": False,
+                    "is_road": bool(nearest.get("is_road", False)),
                     "geometry": geom,
                     "u": u,
                     "v": v,
@@ -368,6 +409,7 @@ def _add_depot(
             "seq": 0,
             "length_m": access.length,
             "off_trail": True,  # priced at the off-trail speed factor
+            "is_road": False,
             "geometry": access,
             "u": depot_node,
             "v": anchor_node,
@@ -419,7 +461,9 @@ def validate(
     """Structural QA. Every one of these has caught a real bug during development."""
     degree = pd.concat([edges["u"], edges["v"]]).value_counts()
     comp = connected_components(edges, len(nodes))
-    on_trail = edges[~edges["off_trail"]]
+    # "on trail" now means *scoreable* trail: forest roads and bushwhacks both score zero.
+    on_trail = edges[edges["trail_id"].notna()]
+    roads = edges[edges.get("is_road", False) == True]  # noqa: E712
 
     # Each trail's edges should form one contiguous chain.
     broken = []
@@ -429,11 +473,19 @@ def validate(
         if len({sub_comp[int(n)] for n in sub_nodes}) != 1:
             broken.append(tid)
 
-    short_loops = ((edges["u"] == edges["v"]) & (edges["length_m"] < 50)).sum()
+    # A self-loop shorter than the snap tolerance is a collapsed sliver and a bug. A
+    # longer one is a real switchback where the trail returns close to itself, and is
+    # perfectly routable (flow in equals flow out), so it is only reported, not flagged.
+    tol = CONFIG.topology.snap_tol_m
+    is_loop = edges["u"] == edges["v"]
+    short_loops = (is_loop & (edges["length_m"] < tol)).sum()
+    real_loops = (is_loop & (edges["length_m"] >= tol)).sum()
     checks = [
         ("edges", len(edges), ""),
         ("nodes", len(nodes), ""),
         ("trails", on_trail["trail_id"].nunique(), "expect 40"),
+        ("road edges", len(roads), ""),
+        ("road miles (unscored)", round(roads["length_m"].sum() / M_PER_MILE, 2), ""),
         (
             "network components",
             int(comp.max()) + 1,
@@ -441,7 +493,8 @@ def validate(
         ),
         ("dangle nodes (degree 1)", int((degree == 1).sum()), ""),
         ("isolated nodes (degree 0)", int(len(nodes) - degree.index.nunique()), "expect 0"),
-        ("degenerate self-loops (<50 m)", int(short_loops), "expect 0"),
+        (f"degenerate self-loops (<{tol:.0f} m)", int(short_loops), "expect 0"),
+        ("genuine switchback loops", int(real_loops), "informational"),
         ("zero-length edges", int((edges["length_m"] < 1e-6).sum()), "expect 0"),
         ("total on-trail miles", round(on_trail["length_m"].sum() / M_PER_MILE, 3), "expect ~40.13"),
         (
@@ -458,7 +511,7 @@ def validate(
 def component_summary(edges: gpd.GeoDataFrame, nodes: gpd.GeoDataFrame) -> pd.DataFrame:
     """Which trails sit in which component — the key input to bushwhack planning."""
     comp = connected_components(edges, len(nodes))
-    on_trail = edges[~edges["off_trail"]].copy()
+    on_trail = edges[edges["trail_id"].notna()].copy()
     on_trail["component"] = [comp[int(u)] for u in on_trail["u"]]
     return (
         on_trail.groupby("component")
@@ -508,7 +561,15 @@ def build_network(
     params: TopologyParams | None = None,
     *,
     add_depot: bool = True,
+    roads: gpd.GeoDataFrame | None = None,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame, int | None]:
+    """Planarize the trails — and optionally the forest roads — into one noded network.
+
+    Roads participate fully in splitting and noding, so road/trail junctions become real
+    graph nodes. They are distinguished only by carrying no ``trail_id``: they cost time
+    at full walking speed but earn no points, since they are not among the 40 scored
+    trails.
+    """
     params = params or CONFIG.topology
     projected = trails.to_crs(CRS_PROJECTED)
 
@@ -516,12 +577,21 @@ def build_network(
         int(r.trail_id): r.geometry.simplify(params.simplify_tol_m)
         for r in projected.itertuples(index=False)
     }
-    meta = {int(r.trail_id): {"name": r.name} for r in projected.itertuples(index=False)}
+    meta = {int(r.trail_id): {"name": r.name, "trail_id": int(r.trail_id)} for r in projected.itertuples(index=False)}
+
+    if roads is not None and len(roads):
+        # Negative synthetic keys keep roads out of the trail_id namespace while letting
+        # them flow through exactly the same splitting and noding code path.
+        for offset, row in enumerate(roads.to_crs(CRS_PROJECTED).itertuples(index=False), start=1):
+            key = -offset
+            lines[key] = row.geometry.simplify(params.simplify_tol_m)
+            meta[key] = {"name": getattr(row, "name", "Forest road"), "trail_id": None}
 
     splits = _collect_split_distances(lines, params.snap_tol_m, params.min_edge_len_m)
     edges = _split_trails(lines, meta, splits)
     edges, nodes = _assign_nodes(edges, params.snap_tol_m)
     edges = _drop_degenerate(edges, params.snap_tol_m)
+    edges, nodes = _prune_orphan_roads(edges, nodes)
 
     depot_node = None
     if add_depot:
@@ -530,12 +600,23 @@ def build_network(
     return edges, nodes, depot_node
 
 
-def run(params: TopologyParams | None = None) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+def run(
+    params: TopologyParams | None = None, *, include_roads: bool = True
+) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     trails = gpd.read_parquet(TRAILS_RAW)
     raw_length_m = float(trails.to_crs(CRS_PROJECTED).length.sum())
 
-    edges, nodes, depot_node = build_network(trails, params)
+    roads = None
+    if include_roads:
+        from .roads import load_roads
+
+        try:
+            roads = load_roads(trails)
+        except Exception as exc:  # noqa: BLE001 - roads are an enhancement, not a hard dep
+            log.warning("road fetch failed (%s); building trails-only network", exc)
+
+    edges, nodes, depot_node = build_network(trails, params, roads=roads)
     nodes["is_depot"] = nodes["node_id"] == depot_node
 
     edges.to_parquet(EDGES)

@@ -6,7 +6,7 @@ not a network, and making it into one is where almost all the risk lives.
 
 import marimo
 
-__generated_with = "0.9.0"
+__generated_with = "0.23.16"
 app = marimo.App(width="medium", app_title="Network construction")
 
 
@@ -20,23 +20,21 @@ def _():
     from hullabaloo.config import CONFIG, EDGES, M_PER_MILE, NODES, TRAILS_RAW
     from hullabaloo import topology as topo
 
-    return CONFIG, EDGES, M_PER_MILE, NODES, TRAILS_RAW, gpd, mo, np, pd, topo
+    return EDGES, NODES, TRAILS_RAW, gpd, mo, pd, topo
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        # Phase 1-2 — from 40 polylines to one routable network
+    mo.md(r"""
+    # Phase 1-2 — from 40 polylines to one routable network
 
-        The Trail Not Taken publishes one GPX per trail. Downloading all 40 gives you
-        40.14 miles of geometry and **no topology whatsoever**: 40 independent
-        `LineString`s that happen to overlap on a map.
+    The Trail Not Taken publishes one GPX per trail. Downloading all 40 gives you
+    40.14 miles of geometry and **no topology whatsoever**: 40 independent
+    `LineString`s that happen to overlap on a map.
 
-        A router needs shared nodes at junctions. Getting there is the make-or-break step,
-        and it is worth showing the evidence rather than asserting the result.
-        """
-    )
+    A router needs shared nodes at junctions. Getting there is the make-or-break step,
+    and it is worth showing the evidence rather than asserting the result.
+    """)
     return
 
 
@@ -57,43 +55,39 @@ def _(TRAILS_RAW, gpd, mo, pd):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## Why endpoint snapping is not enough
+    mo.md(r"""
+    ## Why endpoint snapping is not enough
 
-        A first instinct is to snap coincident endpoints together. On this dataset that
-        fails badly. Measuring every one of the 80 trail endpoints against every other
-        trail:
+    A first instinct is to snap coincident endpoints together. On this dataset that
+    fails badly. Measuring every one of the 80 trail endpoints against every other
+    trail:
 
-        | contact type | count (within 10 m) |
-        |---|---|
-        | endpoint meets another **endpoint** | 20 / 80 |
-        | endpoint meets another trail's **geometry** | 55 / 80 |
+    | contact type | count (within 10 m) |
+    |---|---|
+    | endpoint meets another **endpoint** | 20 / 80 |
+    | endpoint meets another trail's **geometry** | 55 / 80 |
 
-        So the network is dominated by **T-junctions** — a trail ending partway along
-        another trail — plus 10 genuine interior **X-crossings**. Endpoint-only snapping
-        would leave the great majority of junctions unconnected, producing a network that
-        looks right on a map and routes nothing.
+    So the network is dominated by **T-junctions** — a trail ending partway along
+    another trail — plus 10 genuine interior **X-crossings**. Endpoint-only snapping
+    would leave the great majority of junctions unconnected, producing a network that
+    looks right on a map and routes nothing.
 
-        The fix is to collect split positions along each trail from three sources (true
-        intersections, foreign-endpoint projections, and its own endpoints), cut every
-        trail at those positions, then cluster the resulting endpoints into shared nodes.
-        """
-    )
+    The fix is to collect split positions along each trail from three sources (true
+    intersections, foreign-endpoint projections, and its own endpoints), cut every
+    trail at those positions, then cluster the resulting endpoints into shared nodes.
+    """)
     return
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## Choosing the snap tolerance on evidence
+    mo.md(r"""
+    ## Choosing the snap tolerance on evidence
 
-        The tolerance is a real judgement call: too tight and the network stays
-        fragmented, too loose and it invents junctions that do not exist. Rather than
-        pick a round number, sweep it.
-        """
-    )
+    The tolerance is a real judgement call: too tight and the network stays
+    fragmented, too loose and it invents junctions that do not exist. Rather than
+    pick a round number, sweep it.
+    """)
     return
 
 
@@ -121,23 +115,21 @@ def _(mo, sweep):
         .properties(height=260, title="Component count vs snap tolerance")
     )
     mo.vstack([mo.ui.altair_chart(_chart), mo.ui.table(sweep, selection=None)])
-    return alt,
+    return
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        Component count falls 14 → 6 → 4 → **3** and then flatlines at 3 all the way out
-        to 50 m. That plateau is the important part: it is the **structural floor**. The
-        three remaining pieces are separated by genuine 285–700 m gaps that no amount of
-        snapping will ever close.
+    mo.md(r"""
+    Component count falls 14 → 6 → 4 → **3** and then flatlines at 3 all the way out
+    to 50 m. That plateau is the important part: it is the **structural floor**. The
+    three remaining pieces are separated by genuine 285–700 m gaps that no amount of
+    snapping will ever close.
 
-        18 m is the smallest tolerance that reaches the floor, so that is the choice.
-        Since 18 m is generous by GIS standards, every junction that only exists above
-        10 m gets reviewed individually below.
-        """
-    )
+    18 m is the smallest tolerance that reaches the floor, so that is the choice.
+    Since 18 m is generous by GIS standards, every junction that only exists above
+    10 m gets reviewed individually below.
+    """)
     return
 
 
@@ -156,7 +148,7 @@ def _(mo, topo, trails):
             ),
         ]
     )
-    return (band,)
+    return
 
 
 @app.cell
@@ -175,20 +167,18 @@ def _(EDGES, NODES, gpd, mo, topo, trails):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        Two of those checks earned their keep during development:
+    mo.md(r"""
+    Two of those checks earned their keep during development:
 
-        * **degenerate self-loops** — an early version cut trails at split points closer
-          together than the snap tolerance. Both ends of the resulting sliver then
-          clustered into the *same* node, producing 19 zero-length self-loops. The fix
-          was to refuse to create such edges at all: two junctions closer than the
-          tolerance are, by our own definition, one junction.
-        * **length preserved** — splitting must not lose or duplicate geometry. It comes
-          out at 99.9%, the shortfall being the 0.5 m simplification applied to shed GPS
-          jitter.
-        """
-    )
+    * **degenerate self-loops** — an early version cut trails at split points closer
+      together than the snap tolerance. Both ends of the resulting sliver then
+      clustered into the *same* node, producing 19 zero-length self-loops. The fix
+      was to refuse to create such edges at all: two junctions closer than the
+      tolerance are, by our own definition, one junction.
+    * **length preserved** — splitting must not lose or duplicate geometry. It comes
+      out at 99.9%, the shortfall being the 0.5 m simplification applied to shed GPS
+      jitter.
+    """)
     return
 
 
@@ -230,7 +220,7 @@ def _(edges, mo, nodes):
     _ax.legend(frameon=False)
     _ax.set_axis_off()
     mo.mpl.interactive(_fig)
-    return connected_components, matplotlib, plt
+    return
 
 
 if __name__ == "__main__":

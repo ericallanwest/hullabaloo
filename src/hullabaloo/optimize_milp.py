@@ -177,8 +177,13 @@ def build_model(
             prob += (y[t] <= z[e], f"trail_{t}_edge_{e}")
 
     # (5) endpoints of used edges are active nodes
+    #
+    # ``set`` matters: a self-loop edge has u == v, and emitting the constraint once per
+    # endpoint would then register the same constraint name twice, which PuLP rejects
+    # outright. The network contains a genuine 31 m switchback where a trail returns to
+    # its own node, so this is a real case rather than a hypothetical one.
     for e in edge_ids:
-        for v in edge_nodes[e]:
+        for v in set(edge_nodes[e]):
             if v != depot:
                 prob += (p[v] >= z[e], f"active_{v}_{e}")
 

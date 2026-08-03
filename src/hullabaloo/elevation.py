@@ -299,8 +299,10 @@ def price_edges(
     out["min_ele_m"] = lo
     out["max_ele_m"] = hi
     out["length_mi"] = out["length_m"] / 1609.344
-    # Points are only earned on real trail, never on off-trail connectors.
-    out["score_mi"] = np.where(out["off_trail"], 0.0, out["length_mi"])
+    # Points are earned only on the 40 scored trails. Forest roads and bushwhack
+    # connectors both cost time and score nothing — they differ in *speed*
+    # (roads full speed, bushwhacks 60%), which is what ``off_trail`` controls.
+    out["score_mi"] = np.where(out["trail_id"].notna(), out["length_mi"], 0.0)
     return out
 
 
@@ -316,7 +318,7 @@ def validate_against_official(edges: gpd.GeoDataFrame, trails: gpd.GeoDataFrame)
     per-edge gain slightly overestimates versus a single continuous profile (each edge
     boundary can add a fractional up-tick), but the bias is small and consistent.
     """
-    on_trail = edges[~edges["off_trail"]]
+    on_trail = edges[edges["trail_id"].notna()]
     agg = (
         on_trail.groupby("trail_id")
         .agg(dem_gain_m=("gain_fwd_m", "sum"), dem_rev_gain_m=("gain_rev_m", "sum"))

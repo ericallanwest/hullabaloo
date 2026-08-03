@@ -204,6 +204,26 @@ def evaluate(route: Route) -> float:
     return score
 
 
+def _order_from_route(route: Route, chains: dict[int, TrailChain]) -> list[int]:
+    """Recover a trail visit order from a concrete route, for use as an ALNS seed.
+
+    A trail counts as "visited" at the point the route first completes it, which keeps
+    the recovered order consistent with what the decoder would reproduce.
+    """
+    order: list[int] = []
+    seen: set[int] = set()
+    walked: set[int] = set()
+    for arc in route.arcs:
+        walked.add(arc.edge_id)
+        for trail_id, chain in chains.items():
+            if trail_id in seen:
+                continue
+            if route.net.trail_edges[trail_id] <= walked:
+                order.append(trail_id)
+                seen.add(trail_id)
+    return order
+
+
 # --------------------------------------------------------------------------------------
 # ALNS
 # --------------------------------------------------------------------------------------
@@ -375,6 +395,28 @@ class ALNS:
                 return i
         return len(weights) - 1
 
+    def _best_start(self) -> list[int]:
+        """Pick the strongest of several constructive starts.
+
+        Worth doing rather than always starting from greedy insertion: once the forest
+        roads made the whole network reachable, the nearest-trail baseline jumped from
+        26.4 to 33.6 and began beating short ALNS runs outright. Starting from the best
+        available construction means the search spends its budget improving a good
+        solution instead of climbing back to one.
+        """
+        candidates: list[list[int]] = [self._repair_greedy([])]
+        for builder in (baseline_greedy, baseline_best_ratio):
+            try:
+                route = builder(self.net, self.chains, self.race)
+                order = _order_from_route(route, self.chains)
+                if order:
+                    candidates.append(order)
+            except Exception:  # noqa: BLE001 - a failed construction is not fatal
+                continue
+        return max(
+            candidates, key=lambda o: evaluate(decode(o, self.net, self.chains, self.race))
+        )
+
     def solve(
         self,
         iterations: int = 400,
@@ -383,7 +425,7 @@ class ALNS:
         decay: float = 0.85,
         seed_order: list[int] | None = None,
     ) -> ALNSResult:
-        current = seed_order[:] if seed_order else self._repair_greedy([])
+        current = seed_order[:] if seed_order else self._best_start()
         current_score = evaluate(decode(current, self.net, self.chains, self.race))
         best, best_score = current[:], current_score
 

@@ -95,7 +95,13 @@ class ToblerParams:
     off_trail_factor: float = 0.60
     #: Global pace multiplier — a place to encode fatigue, pack weight, or personal
     #: fitness once calibrated. 1.0 == textbook Tobler.
-    pace_factor: float = 1.0
+    #:
+    #: Set to 1.35 for this racer: Tobler's constants describe unhurried walking, and a
+    #: fit competitor moving with purpose over seven hours is meaningfully quicker. This
+    #: puts peak speed at 8.1 km/h (5.03 mph) on a gentle downhill and 6.80 km/h
+    #: (4.23 mph, ~14.2 min/mile) on the flat. It scales every speed linearly, so the
+    #: shape of the function — and which direction round a loop is faster — is unchanged.
+    pace_factor: float = 1.35
     #: Speed floor so that pathological slopes cannot produce ~infinite traversal times.
     min_speed_kmh: float = 0.15
 
@@ -151,6 +157,23 @@ class BushwhackParams:
     max_connectors: int = 80
     #: Slopes steeper than this (rise/run) are treated as impassable off-trail.
     max_offtrail_slope: float = 1.0
+    #: Treat built-up NLCD classes as impassable off-trail.
+    #:
+    #: Not optional in practice. Without it the optimizer routed its longest bushwhack
+    #: 848 m straight through a residential neighbourhood, because a bare-earth DEM sees
+    #: only gentle slope where the houses are.
+    avoid_developed: bool = True
+    #: Which NLCD classes count as built-up.
+    #:
+    #: 22/23/24 are low/medium/high-intensity development — houses, driveways, parking,
+    #: commercial. Those are genuinely off-limits.
+    #:
+    #: 21 ("Developed, Open Space", <20% impervious) is deliberately **excluded** by
+    #: default. In a forested study area it is dominated by road right-of-ways and their
+    #: verges, and blocking it forbids ever crossing a road — which cost 18 of the 44
+    #: cross-component connectors and ~3 points, for no legitimate reason. Add 21 here if
+    #: you want to keep clear of large-lot residential lawns as well.
+    developed_classes: tuple[int, ...] = (22, 23, 24)
     #: Downsample factor for the cost surface. 1 m cells over the full bbox is a very
     #: large grid; 3 m is ample for connector routing and ~9x cheaper.
     cost_surface_res_m: float = 3.0
