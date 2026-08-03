@@ -36,7 +36,7 @@ const MAPWARPER_2_BOUNDS = MAPWARPER_BOUNDS;   // replace with Page 2's own exte
 const MAPWARPER_2_NATIVE_ZOOM = 17;            // one more zoom of real detail than Page 1
 
 const CAT_COLOR = { unique: '#f7882f', offtrail: '#c0392b', repeat: '#c0392b' };
-const CAT_LABEL = { unique: '', offtrail: 'off-trail', repeat: 'repeat' };
+const CAT_LABEL = { unique: '', offtrail: 'road', repeat: 'repeat' };
 const GOLD = '#FFD700';
 
 // Network grays flip with the UI theme: a mid gray that reads as "faint" on a light
@@ -120,22 +120,22 @@ const currentGroup = L.layerGroup();  // the step under the slider
 // ── Drawing helpers ────────────────────────────────────────────────────────
 function stepStyle(step) {
   if (step.cat === 'repeat') return { color: CAT_COLOR.repeat, weight: 5, opacity: 0.9, dashArray: '6,5' };
-  if (step.cat === 'offtrail')
-    // The depot link is dashed because it is not a path on the ground; roads are solid
-    // because they are, even though neither earns a point.
-    return { color: CAT_COLOR.offtrail, weight: 5, opacity: 0.9, dashArray: step.bushwhack ? '2,6' : null };
+  // "offtrail" is the scoring category, not a surface: it means forest road or access
+  // road, walked at full speed but earning no points. Nothing in the network is actually
+  // off-trail, so these draw solid.
+  if (step.cat === 'offtrail') return { color: CAT_COLOR.offtrail, weight: 5, opacity: 0.9 };
   return { color: CAT_COLOR.unique, weight: 5, opacity: 1 };
 }
 
 function stepVisible(step) {
   if (step.cat === 'repeat')   return $('togRepeat').checked;
-  if (step.cat === 'offtrail') return $('togOff').checked;
+  if (step.cat === 'offtrail') return $('togRoads').checked;
   return true;
 }
 
 function stepPopup(step) {
   const tag = CAT_LABEL[step.cat];
-  const kind = step.cat === 'offtrail' ? (step.bushwhack ? 'off-trail link' : 'road') : tag;
+  const kind = step.cat === 'offtrail' ? 'road' : tag;
   return `<b>${esc(step.name)}</b>${kind ? ` <i>(${kind})</i>` : ''}<br>` +
     `node ${step.from_node} → ${step.to_node}<br>` +
     `${step.miles.toFixed(2)} mi &nbsp; ${fmtMS(step.seconds)}<br>` +
@@ -211,7 +211,7 @@ function updateSidebar(step) {
   // already breaks the sum on about 38% of steps.
   $('sbUnique').textContent = `${fmtScore(cum.unique_miles)} mi / ${fmtHM(run.unique)}`;
   $('sbRepeat').textContent = `${cum.repeat_miles.toFixed(1)} mi / ${fmtHM(run.repeat)}`;
-  $('sbOff').textContent    = `${cum.offtrail_miles.toFixed(1)} mi / ${fmtHM(run.offtrail)}`;
+  $('sbRoads').textContent    = `${cum.offtrail_miles.toFixed(1)} mi / ${fmtHM(run.offtrail)}`;
   $('sbElev').textContent   =
     `${run.gain.toLocaleString()} ft ↑ / ${run.loss.toLocaleString()} ft ↓`;
   $('sbTrails').textContent = `${cum.trails_completed} of ${PRESET.network.n_trails}`;
@@ -250,7 +250,7 @@ function buildItinerary() {
 
   $('itinerary').innerHTML = PRESET.steps.map(s => {
     const tag = s.cat === 'repeat' ? 'repeat'
-              : s.cat === 'offtrail' ? (s.bushwhack ? 'off-trail link' : 'road') : '';
+              : s.cat === 'offtrail' ? 'road' : '';
     const done = completedAt.get(s.i);
     return `<div class="itin-step" data-step="${s.i}">
       <span class="itin-n" style="color:${CAT_COLOR[s.cat]}">${s.i}.</span>
@@ -510,7 +510,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ── Layer toggles ────────────────────────────────────────────────────────
   $('togRepeat').addEventListener('change', () => renderStep(currentStep));
-  $('togOff').addEventListener('change', () => renderStep(currentStep));
+  $('togRoads').addEventListener('change', () => renderStep(currentStep));
 
   // ── Opacity + basemap ────────────────────────────────────────────────────
   $('mapwarpOpacity').addEventListener('input', function () {
