@@ -7,6 +7,8 @@ skips rather than fails, so a partially-built checkout still gives useful signal
 
 from __future__ import annotations
 
+import dataclasses
+
 import geopandas as gpd
 import numpy as np
 import pytest
@@ -48,8 +50,21 @@ def test_tobler_peak_is_on_a_gentle_downhill():
 
 
 def test_tobler_flat_pace_is_plausible():
+    """Bound the modelled flat pace at both ends of the pace_factor decision.
+
+    The configured pace allows up to 4.5 mph, not walking speed: ``pace_factor`` is
+    deliberately 1.35 for this racer (see ``ToblerParams``), which puts the flat pace at
+    4.23 mph — a fit competitor moving with purpose over seven hours, not a stroller.
+    Unscaled Tobler must still land in ordinary walking territory, so both are checked;
+    asserting only the scaled figure would let a bad ``base_kmh`` hide inside the
+    multiplier.
+    """
     mph = float(tobler_speed_kmh(0.0, CONFIG.tobler)) * 0.621371
-    assert 2.5 < mph < 4.0, f"flat pace {mph:.2f} mph is not a believable hiking speed"
+    assert 2.5 < mph < 4.5, f"flat pace {mph:.2f} mph is not a believable racing speed"
+
+    textbook = dataclasses.replace(CONFIG.tobler, pace_factor=1.0)
+    base_mph = float(tobler_speed_kmh(0.0, textbook)) * 0.621371
+    assert 2.5 < base_mph < 4.0, f"unscaled Tobler {base_mph:.2f} mph is not a walking speed"
 
 
 def test_travel_time_is_direction_dependent_on_a_slope():
@@ -126,9 +141,11 @@ def test_network_is_structurally_clean():
 
 
 def test_splitting_preserved_length():
+    """Splitting must neither lose nor duplicate trail geometry. Compare scored trail
+    only — forest roads add length that was never in the GPX files."""
     trails, edges = _load(TRAILS_RAW), _load(EDGES)
     raw_m = trails.to_crs("EPSG:6346").length.sum()
-    split_m = edges.loc[~edges["off_trail"], "length_m"].sum()
+    split_m = edges.loc[edges["trail_id"].notna(), "length_m"].sum()
     assert split_m == pytest.approx(raw_m, rel=0.005)
 
 
@@ -179,21 +196,41 @@ def test_adding_the_depot_never_destroys_edges():
     assert on_trail_m == pytest.approx(plain_edges["length_m"].sum(), rel=1e-6)
 
 
-def test_trail_network_alone_has_three_components():
-    """The three components are separated by genuine 285-700 m gaps. If this ever changes
-    the bushwhack phase's reason for existing has changed with it."""
+def test_trails_alone_split_into_three_components():
+    """The 40 trails, considered by themselves, are in three pieces separated by genuine
+    285-700 m gaps. This is the fact that motivates bringing in forest roads at all."""
     edges, nodes = _load(EDGES), _load(NODES)
-    comp = connected_components(edges, len(nodes))
-    assert int(comp.max()) + 1 == 3
+    trails_only = edges[edges["trail_id"].notna()]
+    comp = connected_components(trails_only, len(nodes))
+    reachable = {comp[int(u)] for u in trails_only["u"]}
+    assert len(reachable) == 3
 
 
-def test_connectors_make_the_network_connected():
-    import pandas as pd
+def test_forest_roads_connect_the_whole_network():
+    """With the forest roads included every trail is reachable without going off-trail.
 
-    edges, nodes = _load(EDGES_TIMED), _load(NODES)
-    connectors = _load(CONNECTORS)
-    combined = pd.concat([edges[["u", "v"]], connectors[["u", "v"]]], ignore_index=True)
-    assert int(connected_components(combined, len(nodes)).max()) + 1 == 1
+    This is the finding that reshaped the project: the gaps between the three trail
+    components are spanned by legal, full-speed forest road, so a good route needs
+    essentially no bushwhacking.
+    """
+    edges, nodes = _load(EDGES), _load(NODES)
+    assert int(connected_components(edges, len(nodes)).max()) + 1 == 1
+    roads = edges[edges["is_road"] == True]  # noqa: E712
+    assert len(roads) > 0, "no forest roads in the network"
+    assert roads["trail_id"].isna().all(), "roads must not carry a scoring trail_id"
+
+
+def test_roads_cost_time_but_score_nothing():
+    edges = _load(EDGES_TIMED)
+    roads = edges[edges["is_road"] == True]  # noqa: E712
+    assert (roads["score_mi"] == 0).all(), "forest roads must not earn points"
+    assert (roads["time_fwd_s"] > 0).all()
+    # Roads are walked at full speed, unlike the 60% bushwhack penalty.
+    assert not roads["off_trail"].any()
+    road_speed = (roads["length_m"] / roads["time_fwd_s"]).mean()
+    trail = edges[edges["trail_id"].notna()]
+    trail_speed = (trail["length_m"] / trail["time_fwd_s"]).mean()
+    assert road_speed > trail_speed * 0.8
 
 
 # --------------------------------------------------------------------------------------
@@ -209,11 +246,58 @@ def test_edges_are_priced_in_both_directions():
     assert not np.allclose(edges["time_fwd_s"], edges["time_rev_s"])
 
 
-def test_offtrail_edges_score_nothing():
+def test_only_scored_trails_earn_points():
+    """Points come from the 40 scored trails alone. Bushwhack connectors and forest roads
+    both score zero; they differ only in speed."""
     edges = _load(EDGES_TIMED)
     assert (edges.loc[edges["off_trail"], "score_mi"] == 0).all()
-    on = edges[~edges["off_trail"]]
-    assert np.allclose(on["score_mi"], on["length_m"] / M_PER_MILE)
+    assert (edges.loc[edges["trail_id"].isna(), "score_mi"] == 0).all()
+    scored = edges[edges["trail_id"].notna()]
+    assert np.allclose(scored["score_mi"], scored["length_m"] / M_PER_MILE)
+    assert scored["score_mi"].sum() == pytest.approx(EXPECTED_MILES, abs=0.1)
+
+
+def test_connectors_avoid_water_and_developed_land():
+    """Regression: the cost surface is built from a *bare-earth* DEM, which sees only
+    gentle slope where houses, driveways and lawns are.
+
+    Before the land-cover mask, the optimal route's longest bushwhack ran 848 m straight
+    through a residential neighbourhood. Slope and water checks alone would not have
+    caught it — it took looking at aerial imagery.
+    """
+    from hullabaloo.bushwhack import DEVELOPED_CLASSES, fetch_landcover, fetch_waterbodies
+
+    connectors = _load(CONNECTORS)
+    edges = _load(EDGES_TIMED)
+    bounds = tuple(edges.to_crs("EPSG:4326").total_bounds)
+
+    try:
+        water = fetch_waterbodies(bounds)
+        classes, cls_bounds = fetch_landcover(bounds, width=900, height=900)
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"external land-cover/hydrography services unavailable: {exc}")
+
+    if len(water):
+        assert not len(gpd.sjoin(connectors, water, predicate="intersects", how="inner"))
+
+    # Sample each connector's vertices against the land-cover grid.
+    minx, miny, maxx, maxy = cls_bounds
+    h, w = classes.shape
+    developed_hits = []
+    for row in connectors.to_crs("EPSG:4326").itertuples(index=False):
+        xs = np.array([c[0] for c in row.geometry.coords])
+        ys = np.array([c[1] for c in row.geometry.coords])
+        px = np.clip(((xs - minx) / (maxx - minx) * w).astype(int), 0, w - 1)
+        py = np.clip(((maxy - ys) / (maxy - miny) * h).astype(int), 0, h - 1)
+        sampled = classes[py, px]
+        # The depot access legitimately starts in the trailhead parking lot.
+        if row.name == "depot access":
+            continue
+        fraction = float(np.isin(sampled, DEVELOPED_CLASSES).mean())
+        if fraction > 0.25:
+            developed_hits.append((row.name, round(fraction, 2)))
+
+    assert not developed_hits, f"connectors crossing developed land: {developed_hits}"
 
 
 def test_connectors_are_slower_than_trail_for_the_same_ground():
@@ -292,6 +376,25 @@ def test_alns_beats_the_greedy_baseline(net):
     assert result.score >= baseline
 
 
+def test_milp_model_builds_on_a_network_with_self_loops(net):
+    """Regression: a self-loop edge (u == v) made ``build_model`` emit one constraint
+    name twice, which PuLP rejects, crashing the whole optimization stage.
+
+    The network really does contain a 31 m switchback where a trail returns to its own
+    node, and it only surfaced once the forest roads shifted where trails get split — so
+    this asserts the model builds at all, and that the self-loop is genuinely present.
+    """
+    from hullabaloo.optimize_milp import build_model
+
+    loops = [a for a in net.arcs if a.u == a.v]
+    prob, vars_ = build_model(net)
+    assert len(prob.constraints) > 0
+    assert len(vars_["x"]) == len(net.arcs)
+    if loops:
+        # Each self-loop still gets its endpoint-activation constraint, just once.
+        assert any(name.startswith(f"active_{loops[0].u}_") for name in prob.constraints)
+
+
 def test_seven_hours_is_a_binding_constraint(net):
     """If the budget were generous enough to cover everything the optimization would be
     pointless, so assert the premise of the whole project."""
@@ -299,3 +402,167 @@ def test_seven_hours_is_a_binding_constraint(net):
 
     bound = network_traversal_bound(net)
     assert bound["cover_all_lower_bound_h"] > CONFIG.race.time_budget_s / 3600
+
+
+# --------------------------------------------------------------------------------------
+# Pace re-pricing
+# --------------------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def coarse_dem():
+    """The coarsened surface the connectors were routed over, plus its transform."""
+    from hullabaloo.bushwhack import elevation_surface
+    from hullabaloo.elevation import load_dem
+
+    try:
+        array, transform, _, _ = load_dem()
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"DEM not available: {exc}")
+    return elevation_surface(array, transform)
+
+
+def test_reprice_reproduces_the_stored_connector_times(coarse_dem):
+    """The pace sweep re-times connectors instead of re-routing them, which is only sound
+    if re-timing at the stored pace returns the stored numbers exactly.
+
+    This is the sweep's one silent failure mode. ``build_network`` reads connector times
+    straight off the connector frame, so a re-pricing bug leaves bushwhacks at one pace
+    while every trail moves to another — a mixed-pace model that still solves cleanly and
+    produces a plausible-looking route at a pace that exists nowhere.
+    """
+    from hullabaloo.bushwhack import reprice
+
+    connectors = _load(CONNECTORS)
+    elevation, transform = coarse_dem
+    again = reprice(connectors, elevation, transform, CONFIG.tobler)
+
+    for column in ("time_fwd_s", "time_rev_s"):
+        assert np.allclose(again[column], connectors[column], atol=1e-9), column
+
+
+def test_pace_factor_scales_travel_time_inversely(coarse_dem):
+    """Halving the pace must exactly double the time — the property that lets the sweep
+    re-price rather than re-route, since relative costs are then unchanged."""
+    import dataclasses
+
+    from hullabaloo.bushwhack import reprice
+
+    connectors = _load(CONNECTORS)
+    elevation, transform = coarse_dem
+    slow = reprice(
+        connectors,
+        elevation,
+        transform,
+        dataclasses.replace(CONFIG.tobler, pace_factor=CONFIG.tobler.pace_factor / 2),
+    )
+    ratio = slow["time_fwd_s"].to_numpy() / connectors["time_fwd_s"].to_numpy()
+    assert np.allclose(ratio, 2.0, rtol=1e-9)
+
+
+# --------------------------------------------------------------------------------------
+# Web export
+# --------------------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def sample_route(net):
+    """A real, valid route — cheap enough to build on every test run."""
+    from hullabaloo.optimize_alns import baseline_greedy, build_trail_chains
+
+    return baseline_greedy(net, build_trail_chains(net))
+
+
+def test_traversal_categories_partition_the_walk(net, sample_route):
+    """``unique + repeat + offtrail`` must account for every mile walked, exactly.
+
+    These are the four numbers the sidebar shows, so if they do not add up the page is
+    lying. Note this is a different split from ``Route.evaluate()``: roads are folded in
+    with bushwhacks, and a re-walked connector counts as a repeat rather than off-trail.
+    """
+    from hullabaloo.export import route_gdf
+
+    detail = route_gdf(sample_route)
+    assert set(detail["cat"]) <= {"unique", "repeat", "offtrail"}
+
+    by_cat = detail.groupby("cat")["length_m"].sum() / M_PER_MILE
+    assert by_cat.sum() == pytest.approx(sample_route.evaluate()["walked_miles"], abs=0.01)
+    # Unique miles are exactly the scoring miles, by construction.
+    assert by_cat.get("unique", 0.0) == pytest.approx(
+        sample_route.evaluate()["unique_miles"], abs=0.01
+    )
+    # Only first passes over a scored trail may be marked unique.
+    unique = detail[detail["cat"] == "unique"]
+    assert unique["trail_id"].notna().all()
+    assert unique["first_visit"].all()
+
+
+def test_group_arcs_splits_a_first_pass_from_an_adjacent_repeat():
+    """The web export keys legs on ``(label, category)`` rather than the label alone.
+
+    Walking part of a trail, looping away and returning to finish it produces adjacent
+    arcs with the same name but opposite meanings. Keying on the label alone merges them
+    into a single row that is half new mileage and half not.
+    """
+    import pandas as pd
+
+    from hullabaloo.export import _group_arcs, leg_label
+
+    def arc(cat):
+        return {
+            "name": "Gateway", "off_trail": False, "cat": cat, "trail_id": 1,
+            "from_node": 1, "to_node": 2, "length_m": 100.0, "gain_m": 5.0,
+            "loss_m": 1.0, "time_s": 60.0, "elapsed_s": 60.0, "running_miles": 0.06,
+            "running_trails": 0, "running_score": 0.06,
+        }
+
+    detail = pd.DataFrame([arc("unique"), arc("repeat")])
+    assert len(_group_arcs(detail, leg_label)) == 1
+    assert len(_group_arcs(detail, lambda row: (leg_label(row), row.cat))) == 2
+
+
+def test_preset_document_reconciles(net, sample_route):
+    from hullabaloo import webexport
+
+    document = webexport.preset_dict(net, sample_route, pace_factor=CONFIG.tobler.pace_factor)
+    webexport.check_preset(document)  # raises if any published number fails to add up
+
+    assert document["totals"]["n_steps"] == len(document["steps"])
+    assert all(step["geometry"] for step in document["steps"])
+    # Cumulative fields must be monotonic — a racer cannot un-walk a mile or lose a point.
+    scores = [step["cum"]["score"] for step in document["steps"]]
+    seconds = [step["cum"]["seconds"] for step in document["steps"]]
+    assert scores == sorted(scores)
+    assert seconds == sorted(seconds)
+    # Every completed trail must be attributed to a real step.
+    completed = [t for t in document["trails"] if t["completed_at_step"]]
+    assert len(completed) == document["totals"]["trails_completed"]
+    assert all(1 <= t["completed_at_step"] <= len(document["steps"]) for t in completed)
+
+
+def test_preset_filename_matches_the_front_end():
+    """``docs/js/viz.js`` builds this name independently; if the two ever disagree the
+    page silently 404s on every pace button."""
+    from hullabaloo.webexport import preset_filename
+
+    assert preset_filename(1.0) == "preset_p100.json"
+    assert preset_filename(1.3) == "preset_p130.json"
+    assert preset_filename(1.35) == "preset_p135.json"
+
+
+def test_published_presets_still_reconcile():
+    """Guard the committed artifacts themselves: the site is static, so a stale or
+    hand-edited preset would be served to readers with nothing to catch it."""
+    import json
+
+    from hullabaloo import webexport
+
+    presets = sorted(webexport.WEB_DATA.glob("preset_p*.json"))
+    if not presets:
+        pytest.skip("no presets published yet")
+
+    for path in presets:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        assert document["schema_version"] == webexport.SCHEMA_VERSION, path.name
+        assert path.name == webexport.preset_filename(document["pace_factor"])
+        webexport.check_preset(document)

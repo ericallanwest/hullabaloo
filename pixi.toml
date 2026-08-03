@@ -66,6 +66,9 @@ pipeline = "python -m hullabaloo.pipeline"
 # same, but also spends 10 minutes proving an optimality bound
 pipeline-bounded = "python -m hullabaloo.pipeline --alns-seeds 6 --milp-seconds 600"
 
+# solve one itinerary per pace factor and publish them to docs/data/
+presets = "python scripts/build_presets.py"
+
 test = "pytest -q"
 app = "marimo run notebooks/hullabaloo_app.py"
 edit = "marimo edit notebooks/"

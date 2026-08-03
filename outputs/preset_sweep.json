@@ -1,0 +1,89 @@
+{
+  "elapsed_s": 4583.6,
+  "presets": [
+    {
+      "pace": 1.0,
+      "score": 36.397,
+      "unique_miles": 15.397,
+      "trails_completed": 21,
+      "walked_miles": 17.91,
+      "offtrail_miles": 0.65,
+      "repeat_miles": 1.86,
+      "time_h": 6.999,
+      "time_budget_h": 7.0,
+      "feasible": true,
+      "n_arcs": 74,
+      "source": "milp"
+    },
+    {
+      "pace": 1.1,
+      "score": 39.787,
+      "unique_miles": 17.787,
+      "trails_completed": 22,
+      "walked_miles": 19.73,
+      "offtrail_miles": 0.65,
+      "repeat_miles": 1.29,
+      "time_h": 6.999,
+      "time_budget_h": 7.0,
+      "feasible": true,
+      "n_arcs": 76,
+      "source": "milp"
+    },
+    {
+      "pace": 1.2,
+      "score": 42.817,
+      "unique_miles": 18.817,
+      "trails_completed": 24,
+      "walked_miles": 21.39,
+      "offtrail_miles": 0.65,
+      "repeat_miles": 1.92,
+      "time_h": 7.0,
+      "time_budget_h": 7.0,
+      "feasible": true,
+      "n_arcs": 78,
+      "source": "milp"
+    },
+    {
+      "pace": 1.3,
+      "score": 46.038,
+      "unique_miles": 21.038,
+      "trails_completed": 25,
+      "walked_miles": 23.24,
+      "offtrail_miles": 0.65,
+      "repeat_miles": 1.54,
+      "time_h": 6.997,
+      "time_budget_h": 7.0,
+      "feasible": true,
+      "n_arcs": 80,
+      "source": "milp"
+    },
+    {
+      "pace": 1.4,
+      "score": 48.851,
+      "unique_miles": 21.851,
+      "trails_completed": 27,
+      "walked_miles": 24.57,
+      "offtrail_miles": 1.01,
+      "repeat_miles": 1.71,
+      "time_h": 7.0,
+      "time_budget_h": 7.0,
+      "feasible": true,
+      "n_arcs": 86,
+      "source": "milp"
+    },
+    {
+      "pace": 1.5,
+      "score": 52.078,
+      "unique_miles": 24.078,
+      "trails_completed": 28,
+      "walked_miles": 26.81,
+      "offtrail_miles": 0.99,
+      "repeat_miles": 1.74,
+      "time_h": 6.998,
+      "time_budget_h": 7.0,
+      "feasible": true,
+      "n_arcs": 93,
+      "source": "milp"
+    }
+  ]
+}

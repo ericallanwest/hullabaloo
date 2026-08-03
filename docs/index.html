@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hullabaloo Route Planner</title>
+  <meta name="description" content="Step through the optimized route for the Hullabaloo 7-hour trail rogaine at Pandapas Pond, Virginia.">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <link rel="stylesheet" href="css/style.css"/>
+</head>
+<body>
+
+<!-- ── Loading overlay ──────────────────────────────────────────────────── -->
+<div id="loading">
+  <div class="spinner"></div>
+  <p>Loading itinerary…</p>
+</div>
+
+<!-- ── Left sidebar: parameter presets ──────────────────────────────────── -->
+<div id="left-sidebar">
+  <div class="title-block">
+    <h1>Hullabaloo</h1>
+    <p>7-hour rogaine · Pandapas Pond, VA</p>
+  </div>
+  <div class="param-group">
+    <div class="param-label" title="Multiplier on Tobler's hiking speeds. 1.0 is textbook Tobler — unhurried walking. A fit racer moving with purpose is quicker.">Pace factor</div>
+    <div class="param-options" id="paceOptions">
+      <label><input type="radio" name="pace" value="1.0"> 1.0 <span class="param-note">textbook Tobler</span></label>
+      <label><input type="radio" name="pace" value="1.1"> 1.1</label>
+      <label><input type="radio" name="pace" value="1.2"> 1.2</label>
+      <label><input type="radio" name="pace" value="1.3" checked> 1.3</label>
+      <label><input type="radio" name="pace" value="1.4"> 1.4</label>
+      <label><input type="radio" name="pace" value="1.5"> 1.5 <span class="param-note">fast</span></label>
+    </div>
+  </div>
+  <div id="presetInfo"></div>
+  <div id="presetError"></div>
+</div>
+<button id="left-toggle" title="Hide/show parameters">◀</button>
+
+<!-- ── Map ───────────────────────────────────────────────────────────────── -->
+<div id="map"></div>
+
+<!-- ── Right sidebar: race stats ────────────────────────────────────────── -->
+<button id="sidebar-toggle" title="Hide/show race details">▶</button>
+<div id="sidebar">
+  <!-- Pinned: these count up as you step, so they must stay visible while the
+       itinerary below scrolls itself to the current leg. -->
+  <div class="stats-sticky">
+    <div class="day-header" id="sbHeader">—</div>
+    <div class="day-route"  id="sbClock">—</div>
+    <div class="sec-title">Today</div>
+    <div class="stat-grid">
+      <span class="stat-lbl">Total:</span>     <span class="stat-val" id="sbTotal">—</span>
+      <span class="stat-lbl">Unique:</span>    <span class="stat-val" id="sbUnique">—</span>
+      <span class="stat-lbl">Repeat:</span>    <span class="stat-val" id="sbRepeat">—</span>
+      <span class="stat-lbl">Off-Trail:</span> <span class="stat-val" id="sbOff">—</span>
+    </div>
+    <div class="stat-grid stat-score">
+      <span class="stat-lbl">Trails Completed:</span> <span class="stat-val" id="sbTrails">—</span>
+      <span class="stat-lbl">Score:</span>            <span class="stat-val" id="sbScore">—</span>
+    </div>
+  </div>
+
+  <!-- Map completion is hidden for now: covering this network takes 10.6 h against a
+       7 h budget, so a completion bar would only ever read "not close". Kept in the
+       DOM so it can be revived without re-deriving it. -->
+  <div id="completionBlock" style="display:none">
+    <div class="sec-title">Map Completion</div>
+    <div class="prog-bg"><div class="prog-fill" id="progFill" style="width:0%"></div></div>
+    <div class="prog-lbl">
+      <span id="progPct">0%</span>
+      <span id="progMi">0 / — mi</span>
+    </div>
+  </div>
+
+  <div class="sec-title">Legend</div>
+  <div class="legend">
+    <div><span class="leg-line" id="legNet" style="background:#999"></span>Trail network — not yet walked</div>
+    <div><span class="leg-line" style="background:#f7882f"></span>Unique — first pass, scores</div>
+    <div><span class="leg-line" style="background:#c0392b"></span>Off-trail — road or bushwhack</div>
+    <div><span class="leg-line" style="background:repeating-linear-gradient(90deg,#c0392b 0 5px,transparent 5px 9px)"></span>Repeat — no extra points</div>
+    <div><span class="leg-line" style="background:repeating-linear-gradient(90deg,#f08080 0 4px,transparent 4px 8px)"></span>Bushwhack — available, unused</div>
+    <div><span class="leg-line" style="background:#FFD700"></span>Current step</div>
+  </div>
+
+  <div class="sec-title">Today's Route</div>
+  <div id="itinerary"></div>
+</div>
+
+<!-- ── Bottom controls ───────────────────────────────────────────────────── -->
+<div id="controls">
+  <div class="slider-row">
+    <button class="btn" id="btnStepPrev">← Step</button>
+    <input type="range" id="stepSlider" min="1" max="1" value="1"
+           style="flex:1;accent-color:#f7882f;cursor:pointer">
+    <span class="day-lbl" id="stepLbl" style="min-width:120px;font-size:12px">— / —</span>
+    <button class="btn" id="btnStepNext">Step →</button>
+    <button class="btn" id="btnStepPlay">▶ Play</button>
+    <button class="btn" id="btnZoomStep">⊕ Zoom to Step</button>
+  </div>
+  <div class="toggle-row">
+    <label><input type="checkbox" id="togRepeat" checked>   Repeats</label>
+    <label><input type="checkbox" id="togOff" checked>      Off-Trail</label>
+  </div>
+  <div class="opacity-row">
+    <button class="btn" id="btnHome" title="Zoom to full map" style="margin-right:4px;padding:2px 8px">🏠</button>
+    <span id="mapwarpLabel">Trail Map</span>
+    <input type="range" id="mapwarpOpacity" min="0" max="100" step="5" value="40">
+    <span id="opacityVal">40%</span>
+    <span style="margin:0 6px;color:var(--divider)">|</span>
+    <span>Hillshade</span>
+    <input type="range" id="hillshadeOpacity" min="0" max="100" step="5" value="15">
+    <span id="hillshadeOpacityVal">15%</span>
+    <span style="margin:0 6px;color:var(--divider)">|</span>
+    <span>Basemap</span>
+    <input type="range" id="basemapOpacity" min="0" max="100" step="5" value="35">
+    <span id="basemapOpacityVal">35%</span>
+    <select id="basemapSel" style="font-size:11px;border:1px solid var(--border);border-radius:3px;padding:2px 4px;cursor:pointer;margin-left:4px">
+      <option>USGS Topo</option>
+      <option>USGS Imagery</option>
+      <option>OSM Grayscale</option>
+      <option>OSM Color</option>
+      <option>CartoDB Light</option>
+      <option>CartoDB Dark</option>
+      <option>ESRI World Topo</option>
+    </select>
+    <button class="btn" id="btnDark" title="Toggle dark mode" style="margin-left:4px;padding:2px 8px">🌙</button>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/leaflet-polylinedecorator@1.6.0/dist/leaflet.polylineDecorator.js"></script>
+<script src="js/viz.js"></script>
+</body>
+</html>

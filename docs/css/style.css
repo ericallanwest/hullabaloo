@@ -1,0 +1,199 @@
+/* ── Theme variables ──────────────────────────────────────────────────────── */
+:root {
+  --bg: #f4f5f7;
+  --panel: #ffffff;
+  --text: #1a1a2e;
+  --muted: #666677;
+  --border: #d0d3da;
+  --hairline: #f0f0f0;
+  --accent: #c0392b;
+  --accent-hover: #a93226;
+  --control: #e8eaed;
+  --badge-bg: #d5f5e3;
+  --badge-text: #1a7a42;
+  --divider: #ccc;
+  --active-bg: #fff9e6;
+  --overlay: rgba(255,255,255,0.88);
+}
+body.dark {
+  --bg: #15171e;
+  --panel: #1e2129;
+  --text: #e6e7ee;
+  --muted: #9fa1b3;
+  --border: #3a3e4a;
+  --hairline: #2c303a;
+  --accent: #e05545;
+  --accent-hover: #c0392b;
+  --control: #2a2e38;
+  --badge-bg: #1d3a2a;
+  --badge-text: #7fd8a0;
+  --divider: #4a4e5a;
+  --active-bg: #363019;
+  --overlay: rgba(21,23,30,0.88);
+}
+
+/* ── Reset & base ─────────────────────────────────────────────────────────── */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Segoe UI', sans-serif; font-size: 13px;
+  background: var(--bg); color: var(--text); overflow: hidden;
+}
+
+/* ── Layout ───────────────────────────────────────────────────────────────── */
+#left-sidebar {
+  position: absolute; top: 0; left: 0; width: 220px; bottom: 140px;
+  background: var(--panel); padding: 14px 16px; overflow-y: auto;
+  border-right: 1px solid var(--border); z-index: 999;
+  transition: width 0.25s ease, padding 0.25s ease;
+}
+#left-toggle {
+  position: absolute; top: 50%; left: 220px; transform: translateY(-50%);
+  width: 16px; height: 52px; background: var(--accent); color: #fff;
+  border: none; border-radius: 0 4px 4px 0; cursor: pointer; font-size: 11px;
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1000; transition: left 0.25s ease;
+}
+#left-toggle:hover { background: var(--accent-hover); }
+body.left-hidden #left-sidebar  { width: 0; padding: 0; overflow: hidden; }
+body.left-hidden #left-toggle   { left: 0; }
+
+#map {
+  position: absolute; top: 0; left: 220px; right: 340px; bottom: 140px;
+  transition: left 0.25s ease, right 0.25s ease;
+}
+body.left-hidden   #map { left: 0; }
+body.sidebar-hidden #map { right: 0; }
+
+#sidebar {
+  position: absolute; top: 0; right: 0; width: 340px; bottom: 140px;
+  background: var(--panel); padding: 0 16px 14px; overflow-y: auto;
+  border-left: 1px solid var(--border);
+  transition: width 0.25s ease, padding 0.25s ease;
+}
+body.sidebar-hidden #sidebar { width: 0; padding: 0; overflow: hidden; }
+
+#sidebar-toggle {
+  position: absolute; top: 50%; right: 340px; transform: translateY(-50%);
+  width: 16px; height: 52px; background: var(--accent); color: #fff;
+  border: none; border-radius: 4px 0 0 4px; cursor: pointer; font-size: 11px;
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1000; transition: right 0.25s ease;
+}
+#sidebar-toggle:hover { background: var(--accent-hover); }
+body.sidebar-hidden #sidebar-toggle { right: 0; }
+
+#controls {
+  position: absolute; bottom: 0; left: 0; right: 0; height: 140px;
+  background: var(--panel); border-top: 1px solid var(--border);
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 8px; padding: 8px 20px;
+}
+
+/* ── Left sidebar: parameter controls ────────────────────────────────────── */
+.title-block { margin-bottom: 18px; }
+.title-block h1 {
+  font-size: 19px; font-weight: 700; color: var(--accent); letter-spacing: -.01em;
+}
+.title-block p { font-size: 11px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
+
+.param-group { margin-bottom: 14px; }
+.param-label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); margin-bottom: 6px; cursor: help; }
+.param-options { display: flex; flex-direction: column; gap: 5px; }
+.param-options label { display: flex; align-items: baseline; gap: 7px; cursor: pointer; font-size: 13px; color: var(--text); }
+.param-options input[type=radio] { accent-color: var(--accent); cursor: pointer; }
+.param-note { font-size: 10px; color: var(--muted); }
+
+#presetInfo { margin-top: 16px; font-size: 11px; color: var(--muted); line-height: 2.0; }
+#presetInfo .info-row { display: flex; justify-content: space-between; border-bottom: 1px solid var(--hairline); padding: 2px 0; }
+#presetInfo .info-row b { color: var(--text); }
+#presetInfo .info-note { display: block; margin-top: 10px; line-height: 1.5; font-size: 10px; }
+#presetError { margin-top: 8px; font-size: 11px; color: var(--accent); display: none; }
+
+/* ── Right sidebar: race stats ────────────────────────────────────────────── */
+/* The stats count up as you step, so they stay pinned while the itinerary below
+   scrolls itself to the active leg. The sidebar carries no top padding of its own —
+   this block supplies it — so the pinned box sits flush against the scrollport and
+   rows passing underneath cannot peek out above it. */
+.stats-sticky {
+  position: sticky; top: 0; z-index: 5; background: var(--panel);
+  margin: 0 -16px; padding: 14px 16px 8px;
+  border-bottom: 1px solid var(--hairline);
+}
+.day-header  { font-size: 17px; font-weight: 700; color: var(--accent); margin-bottom: 3px; }
+.day-route   { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
+.sec-title   { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); margin: 12px 0 6px; }
+.stat-grid   { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 10px; margin-bottom: 4px; }
+.stat-lbl    { color: var(--muted); font-size: 11px; }
+.stat-val    { color: var(--text); font-size: 13px; font-weight: 600; }
+.stat-score  { margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--hairline); }
+.stat-score .stat-val { font-size: 15px; color: var(--accent); }
+
+.prog-bg     { background: var(--control); border-radius: 4px; height: 13px; margin-bottom: 3px; }
+.prog-fill   { height: 13px; border-radius: 4px; background: linear-gradient(90deg, #27ae60, #1a7a42); transition: width .35s; }
+.prog-lbl    { font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; }
+
+.legend      { line-height: 2.0; font-size: 12px; }
+.leg-line    { display: inline-block; width: 18px; height: 3px; border-radius: 1px; vertical-align: middle; margin-right: 5px; }
+
+#itinerary   { font-size: 11px; line-height: 1.7; }
+/* scroll-margin keeps scrollIntoView from parking the active leg underneath the pinned
+   stats block, which is roughly this tall. */
+.itin-step   { padding: 3px 4px 3px 6px; border-radius: 3px; cursor: pointer; border-left: 3px solid transparent; scroll-margin-top: 250px; }
+.itin-step:hover  { background: var(--bg); }
+.itin-step.active { background: var(--active-bg); border-left: 3px solid #FFD700; }
+.itin-step .itin-n    { font-weight: 700; }
+.itin-step .itin-tag  { color: var(--accent); font-size: 10px; }
+.itin-step .itin-meta { color: var(--muted); padding-left: 12px; display: block; }
+.itin-step .itin-done { color: var(--badge-text); background: var(--badge-bg); border-radius: 8px; font-size: 9px; padding: 0 6px; white-space: nowrap; }
+
+/* ── Bottom controls ──────────────────────────────────────────────────────── */
+.slider-row  { display: flex; align-items: center; gap: 7px; width: 100%; max-width: 960px; }
+.btn {
+  background: var(--control); border: 1px solid var(--accent); color: var(--text);
+  padding: 4px 11px; border-radius: 4px; cursor: pointer; font-size: 12px; white-space: nowrap;
+}
+.btn:hover   { background: var(--accent); color: #fff; }
+.day-lbl     { color: var(--accent); font-weight: 700; font-size: 13px; min-width: 90px; text-align: center; }
+.toggle-row  { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.toggle-row label { display: flex; align-items: center; gap: 4px; cursor: pointer; font-size: 11px; color: var(--muted); }
+.toggle-row input[type=checkbox] { accent-color: var(--accent); cursor: pointer; }
+.opacity-row { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); flex-wrap: wrap; justify-content: center; }
+#mapwarpOpacity, #hillshadeOpacity, #basemapOpacity {
+  width: 110px; accent-color: var(--accent); cursor: pointer;
+}
+#basemapSel  { background: var(--panel); color: var(--text); }
+
+/* ── Map tweaks ───────────────────────────────────────────────────────────── */
+.grayscale-layer { filter: grayscale(100%); }
+.start-marker    { filter: drop-shadow(0 0 3px #fff) drop-shadow(0 0 5px #fff); }
+
+/* ── Dark-mode styling for Leaflet chrome ─────────────────────────────────── */
+body.dark .leaflet-container { background: #15171e; }
+body.dark .leaflet-popup-content-wrapper,
+body.dark .leaflet-popup-tip { background: #1e2129; color: #e6e7ee; }
+body.dark .leaflet-control-attribution { background: rgba(30,33,41,0.75); color: #9fa1b3; }
+body.dark .leaflet-control-attribution a { color: #8ab4f8; }
+body.dark .leaflet-bar a { background: #1e2129; color: #e6e7ee; border-bottom-color: #3a3e4a; }
+
+/* ── Loading overlay ──────────────────────────────────────────────────────── */
+#loading {
+  display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--overlay); z-index: 9999;
+  align-items: center; justify-content: center; flex-direction: column; gap: 12px;
+}
+#loading.visible { display: flex; }
+.spinner {
+  width: 36px; height: 36px; border: 4px solid var(--control);
+  border-top: 4px solid var(--accent); border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+#loading p { font-size: 13px; color: var(--muted); }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Narrow screens ───────────────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  #left-sidebar, #sidebar { width: 190px; }
+  #left-toggle { left: 190px; }
+  #sidebar-toggle { right: 190px; }
+  #map { left: 190px; right: 190px; }
+}

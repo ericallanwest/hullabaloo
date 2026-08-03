@@ -110,6 +110,8 @@ def build_network(
             "v",
             "time_fwd_s",
             "time_rev_s",
+            "gain_fwd_m",
+            "gain_rev_m",
             "score_mi",
             "geometry",
         ]
@@ -144,7 +146,7 @@ def build_network(
                 )
             )
 
-    on_trail = combined[~combined["off_trail"]]
+    on_trail = combined[combined["trail_id"].notna()]
     trail_edges = {
         int(tid): frozenset(int(e) for e in grp["edge_id"])
         for tid, grp in on_trail.groupby("trail_id")
@@ -286,7 +288,7 @@ def network_traversal_bound(net: Network) -> dict:
     """
     by_edge: dict[int, float] = {}
     for arc in net.arcs:
-        if arc.off_trail:
+        if arc.trail_id is None:  # roads and bushwhacks are not required coverage
             continue
         by_edge[arc.edge_id] = min(by_edge.get(arc.edge_id, np.inf), arc.time_s)
 

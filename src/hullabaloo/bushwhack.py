@@ -37,7 +37,7 @@ from .config import (
     ToblerParams,
 )
 from .elevation import load_dem, sample_raster
-from .tobler import profile_travel_time, tobler_speed_ms
+from .tobler import profile_gain_m, profile_travel_time, tobler_speed_ms
 from .topology import connected_components
 
 log = logging.getLogger(__name__)
@@ -46,6 +46,26 @@ log = logging.getLogger(__name__)
 # --------------------------------------------------------------------------------------
 # Cost surface
 # --------------------------------------------------------------------------------------
+
+
+def elevation_surface(
+    array: np.ndarray, transform, params: BushwhackParams | None = None
+) -> tuple[np.ndarray, object]:
+    """Coarsen the DEM to the connector-routing resolution: ``(elevation, transform)``.
+
+    Factored out of :func:`build_cost_surface` so that re-pricing a connector later
+    samples exactly the same surface it was originally routed over. Sampling the raw 1 m
+    DEM instead would give subtly different elevations and therefore different times.
+    """
+    params = params or CONFIG.bushwhack
+    px = abs(transform.a)
+    factor = max(int(round(params.cost_surface_res_m / px)), 1)
+    if factor > 1:
+        h = (array.shape[0] // factor) * factor
+        w = (array.shape[1] // factor) * factor
+        array = array[:h, :w].reshape(h // factor, factor, w // factor, factor).mean(axis=(1, 3))
+        transform = transform * transform.identity().scale(factor, factor)
+    return array, transform
 
 
 def build_cost_surface(
@@ -63,14 +83,7 @@ def build_cost_surface(
     tobler = tobler or CONFIG.tobler
     params = params or CONFIG.bushwhack
 
-    px = abs(transform.a)
-    factor = max(int(round(params.cost_surface_res_m / px)), 1)
-    if factor > 1:
-        h = (array.shape[0] // factor) * factor
-        w = (array.shape[1] // factor) * factor
-        array = array[:h, :w].reshape(h // factor, factor, w // factor, factor).mean(axis=(1, 3))
-        transform = transform * transform.identity().scale(factor, factor)
-
+    array, transform = elevation_surface(array, transform, params)
     cell = abs(transform.a)
     dz_dy, dz_dx = np.gradient(array, cell)
     slope = np.hypot(dz_dx, dz_dy)
@@ -126,6 +139,122 @@ def fetch_waterbodies(bounds_wgs84: tuple[float, float, float, float]):
         return gpd.GeoDataFrame(geometry=[], crs=CRS_PROJECTED)
     gdf = gpd.GeoDataFrame.from_features(payload["features"], crs="EPSG:4326")
     return gdf.to_crs(CRS_PROJECTED)
+
+
+#: NLCD land cover, rendered by the MRLC GeoServer. Requested as a rendered PNG and
+#: classified back via the standard NLCD palette, since the WMS does not serve raw class
+#: values. Rendering shifts colours by a unit or two, so matching is nearest-colour.
+NLCD_WMS = (
+    "https://www.mrlc.gov/geoserver/mrlc_display/NLCD_2021_Land_Cover_L48/wms"
+)
+
+#: Standard NLCD legend. Only the classes that occur in this study area are listed.
+NLCD_PALETTE: dict[tuple[int, int, int], int] = {
+    (70, 107, 159): 11,  # open water
+    (222, 197, 197): 21,  # developed, open space
+    (217, 146, 130): 22,  # developed, low intensity
+    (235, 0, 0): 23,  # developed, medium intensity
+    (171, 0, 0): 24,  # developed, high intensity
+    (179, 172, 159): 31,  # barren
+    (104, 171, 95): 41,  # deciduous forest
+    (28, 95, 44): 42,  # evergreen forest
+    (181, 197, 143): 43,  # mixed forest
+    (223, 223, 194): 52,  # shrub/scrub
+    (196, 212, 0): 71,  # herbaceous
+    (220, 217, 57): 81,  # pasture / hay
+    (171, 108, 40): 82,  # cultivated crops
+    (184, 217, 235): 90,  # woody wetlands
+    (108, 159, 184): 95,  # emergent wetlands
+}
+
+#: Default built-up classes: low/medium/high-intensity development — houses, driveways,
+#: parking, commercial. A bare-earth DEM has no idea these exist, and without masking them
+#: the router will happily send you through somebody's back garden.
+#:
+#: Note 21 ("Developed, Open Space") is *not* included: in a forested area it is mostly
+#: road right-of-way, and blocking it forbids crossing roads. See
+#: ``BushwhackParams.developed_classes``.
+DEVELOPED_CLASSES = (22, 23, 24)
+
+
+def fetch_landcover(bounds_wgs84, width: int = 1800, height: int = 1800):
+    """NLCD class raster over a lon/lat bbox, as ``(classes, bounds)``."""
+    from io import BytesIO
+
+    import requests
+    from PIL import Image
+
+    resp = requests.get(
+        NLCD_WMS,
+        params={
+            "service": "WMS",
+            "version": "1.1.1",
+            "request": "GetMap",
+            "layers": "NLCD_2021_Land_Cover_L48",
+            "bbox": ",".join(str(v) for v in bounds_wgs84),
+            "width": width,
+            "height": height,
+            "srs": "EPSG:4326",
+            "format": "image/png",
+        },
+        timeout=180,
+    )
+    resp.raise_for_status()
+    if "image" not in resp.headers.get("Content-Type", ""):
+        raise RuntimeError(f"NLCD WMS returned {resp.headers.get('Content-Type')}")
+
+    rgb = np.asarray(Image.open(BytesIO(resp.content)).convert("RGB")).astype(np.int16)
+
+    palette = np.array(list(NLCD_PALETTE.keys()), dtype=np.int16)
+    codes = np.array(list(NLCD_PALETTE.values()), dtype=np.uint8)
+    # Nearest palette colour per pixel.
+    diff = rgb.reshape(-1, 1, 3) - palette.reshape(1, -1, 3)
+    nearest = np.argmin((diff.astype(np.int32) ** 2).sum(axis=2), axis=1)
+    return codes[nearest].reshape(rgb.shape[:2]), bounds_wgs84
+
+
+def mask_developed(
+    cost: np.ndarray,
+    transform,
+    bounds_wgs84,
+    *,
+    classes=DEVELOPED_CLASSES,
+    buffer_cells: int = 1,
+) -> tuple[np.ndarray, float]:
+    """Make developed land impassable to off-trail routing.
+
+    Discovered the hard way: the optimal route's longest bushwhack ran 848 m straight
+    through a residential neighbourhood — houses, driveways, mown lawns and a swimming
+    pool — because the cost surface is derived from a bare-earth DEM and slope alone said
+    the going was easy. Land cover is the missing input.
+    """
+    from pyproj import Transformer
+
+    cost = cost.copy()
+    classes_arr, bnds = fetch_landcover(bounds_wgs84)
+
+    rows, cols = np.indices(cost.shape)
+    xs, ys = transform * (cols + 0.5, rows + 0.5)
+    to_wgs = Transformer.from_crs(CRS_PROJECTED, "EPSG:4326", always_xy=True)
+    lons, lats = to_wgs.transform(xs, ys)
+
+    minx, miny, maxx, maxy = bnds
+    h, w = classes_arr.shape
+    px = np.clip(((lons - minx) / (maxx - minx) * w).astype(int), 0, w - 1)
+    py = np.clip(((maxy - lats) / (maxy - miny) * h).astype(int), 0, h - 1)
+    sampled = classes_arr[py, px]
+
+    developed = np.isin(sampled, classes)
+    if buffer_cells:
+        developed = binary_dilation(developed, iterations=buffer_cells)
+    fraction = float(developed.mean())
+    cost[developed] = np.inf
+    log.info(
+        "masked developed land: %.1f%% of the study area (NLCD classes %s)",
+        100 * fraction,
+        ",".join(str(c) for c in classes),
+    )
+    return cost, fraction
 
 
 def mask_water(
@@ -360,6 +489,8 @@ def least_cost_connectors(
                     "time_rev_s": profile_travel_time(
                         distances, elevations, tobler, off_trail=True, reverse=True
                     ),
+                    "gain_fwd_m": profile_gain_m(elevations),
+                    "gain_rev_m": profile_gain_m(elevations, reverse=True),
                     "geometry": line,
                 }
             )
@@ -392,6 +523,54 @@ def least_cost_connectors(
     return gdf
 
 
+def reprice(
+    connectors: gpd.GeoDataFrame,
+    elevation: np.ndarray,
+    transform,
+    tobler: ToblerParams | None = None,
+) -> gpd.GeoDataFrame:
+    """Re-time existing connectors under different Tobler parameters.
+
+    Where an off-trail connector *goes* does not depend on pace: multiplying every speed
+    by the same factor leaves the cost surface's relative costs untouched, so the
+    least-cost path between two nodes is unchanged and only its duration moves. That
+    makes a pace sweep cheap — no cost surface, no land-cover masks, no MCP sweeps, just
+    a re-integration along geometry we already have.
+
+    Timing is reconstructed from each stored line's own vertices, which are precisely the
+    cost-surface cells :func:`least_cost_connectors` walked. Re-densifying at a fixed
+    step instead would resample the profile and quietly disagree with the connector times
+    the optimizer was originally priced against.
+
+    Skipping this step is the subtle way to get a pace sweep wrong: :func:`graph.
+    build_network` reads ``time_fwd_s`` / ``time_rev_s`` straight off the connector
+    frame, so bushwhacks would stay frozen at whatever pace built the file while every
+    trail scaled around them — a mixed-pace model that still solves cleanly.
+    """
+    tobler = tobler or CONFIG.tobler
+    out = connectors.copy()
+
+    fwd, rev, gain_f, gain_r = [], [], [], []
+    for geom in out.geometry:
+        xy = np.asarray(geom.coords, dtype=float)
+        distances = np.concatenate(
+            [[0.0], np.cumsum(np.linalg.norm(np.diff(xy, axis=0), axis=1))]
+        )
+        elevations = sample_raster(elevation, transform, xy[:, 0], xy[:, 1])
+        fwd.append(profile_travel_time(distances, elevations, tobler, off_trail=True))
+        rev.append(
+            profile_travel_time(distances, elevations, tobler, off_trail=True, reverse=True)
+        )
+        gain_f.append(profile_gain_m(elevations))
+        gain_r.append(profile_gain_m(elevations, reverse=True))
+
+    out["time_fwd_s"] = fwd
+    out["time_rev_s"] = rev
+    out["gain_fwd_m"] = gain_f
+    out["gain_rev_m"] = gain_r
+    return out
+
+
 def run(
     tobler: ToblerParams | None = None, params: BushwhackParams | None = None
 ) -> gpd.GeoDataFrame:
@@ -403,6 +582,18 @@ def run(
     cost, elevation, transform = build_cost_surface(array, transform, tobler, params)
     bounds_wgs84 = tuple(edges.to_crs("EPSG:4326").total_bounds)
     cost, water = mask_water(cost, elevation, transform, bounds_wgs84)
+    bp = params or CONFIG.bushwhack
+    if bp.avoid_developed:
+        try:
+            cost, _ = mask_developed(
+                cost, transform, bounds_wgs84, classes=bp.developed_classes
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.error(
+                "land-cover mask FAILED (%s) — connectors may cross private property; "
+                "review outputs/connector_review.png before trusting this run",
+                exc,
+            )
 
     pairs = candidate_pairs(edges, nodes, params)
     connectors = least_cost_connectors(

@@ -13,8 +13,10 @@ Outputs
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Callable, NamedTuple
 from xml.etree import ElementTree as ET
 
 import geopandas as gpd
@@ -31,6 +33,7 @@ GPX_PATH = OUTPUTS / "route.gpx"
 CUES_PATH = OUTPUTS / "route_cues.csv"
 MAP_PATH = OUTPUTS / "route_map.png"
 MAP_HTML_PATH = OUTPUTS / "route_map.html"
+CONNECTOR_REVIEW_PATH = OUTPUTS / "connector_review.png"
 
 
 # --------------------------------------------------------------------------------------
@@ -38,10 +41,33 @@ MAP_HTML_PATH = OUTPUTS / "route_map.html"
 # --------------------------------------------------------------------------------------
 
 
-def _edge_lookup(net: Network) -> dict[int, tuple[LineString, int, float]]:
-    """``edge_id -> (geometry, u, length_m)``, built once instead of scanning per arc."""
+class _EdgeInfo(NamedTuple):
+    """Everything the route exporters need to know about one undirected edge."""
+
+    geometry: LineString
+    u: int
+    length_m: float
+    gain_fwd_m: float
+    gain_rev_m: float
+
+
+def _edge_lookup(net: Network) -> dict[int, _EdgeInfo]:
+    """``edge_id -> _EdgeInfo``, built once instead of scanning per arc."""
+
+    def _num(row, column: str) -> float:
+        # Bushwhack connectors predate the gain columns, so treat a missing or NA
+        # value as flat rather than propagating NaN into the exported profile.
+        value = getattr(row, column, None)
+        return 0.0 if value is None or pd.isna(value) else float(value)
+
     return {
-        int(r.edge_id): (r.geometry, int(r.u), float(r.length_m))
+        int(r.edge_id): _EdgeInfo(
+            geometry=r.geometry,
+            u=int(r.u),
+            length_m=float(r.length_m),
+            gain_fwd_m=_num(r, "gain_fwd_m"),
+            gain_rev_m=_num(r, "gain_rev_m"),
+        )
         for r in net.edges.itertuples(index=False)
     }
 
@@ -49,11 +75,40 @@ def _edge_lookup(net: Network) -> dict[int, tuple[LineString, int, float]]:
 def arc_geometry(net: Network, arc, lookup: dict | None = None) -> LineString:
     """Geometry of one arc, oriented in the direction of travel."""
     lookup = lookup if lookup is not None else _edge_lookup(net)
-    geom, edge_u, _ = lookup[arc.edge_id]
+    info = lookup[arc.edge_id]
+    geom = info.geometry
     # Edge geometry runs from edge_u to edge_v; flip it when the arc goes the other way.
-    if edge_u != arc.u:
+    if info.u != arc.u:
         geom = LineString(list(geom.coords)[::-1])
     return geom
+
+
+def arc_relief_m(arc, info: _EdgeInfo) -> tuple[float, float]:
+    """``(gain_m, loss_m)`` for one arc, in its direction of travel.
+
+    Descending an edge loses exactly what climbing it the other way gains, so the two
+    stored directional gains cover both directions without re-reading the DEM.
+    """
+    forward = info.u == arc.u
+    return (info.gain_fwd_m, info.gain_rev_m) if forward else (info.gain_rev_m, info.gain_fwd_m)
+
+
+def arc_category(arc, first_visit: bool) -> str:
+    """How this traversal counts: ``unique`` (scores), ``repeat``, or ``offtrail``.
+
+    Three kinds of ground exist in this network, not two. Scored trails earn points;
+    forest roads and bushwhack connectors both earn nothing and differ only in speed.
+    Roads and bushwhacks are therefore folded together as ``offtrail`` — ``Arc.off_trail``
+    still distinguishes them for styling and labelling.
+
+    Note this differs slightly from ``Route.evaluate``'s ``offtrail_miles``, which counts
+    *every* bushwhack traversal: here a second pass over a connector is a ``repeat``. The
+    walk-order definition is the one a racer stepping through the route cares about, and
+    ``unique + repeat + offtrail`` still reconciles exactly to the distance walked.
+    """
+    if not first_visit:
+        return "repeat"
+    return "unique" if arc.trail_id is not None else "offtrail"
 
 
 def route_geometry(route: Route) -> LineString:
@@ -79,8 +134,11 @@ def route_gdf(route: Route) -> gpd.GeoDataFrame:
 
     for step, arc in enumerate(route.arcs):
         elapsed += arc.time_s
+        info = lookup[arc.edge_id]
+        first_visit = arc.edge_id not in seen
         seen.add(arc.edge_id)
         score, miles, trails = score_edges(seen, net, route.race)
+        gain_m, loss_m = arc_relief_m(arc, info)
         rows.append(
             {
                 "step": step,
@@ -88,6 +146,8 @@ def route_gdf(route: Route) -> gpd.GeoDataFrame:
                 "trail_id": arc.trail_id,
                 "name": arc.name,
                 "off_trail": arc.off_trail,
+                "first_visit": first_visit,
+                "cat": arc_category(arc, first_visit),
                 "from_node": arc.u,
                 "to_node": arc.v,
                 "time_s": round(arc.time_s, 1),
@@ -96,7 +156,9 @@ def route_gdf(route: Route) -> gpd.GeoDataFrame:
                 "running_miles": round(miles, 3),
                 "running_trails": trails,
                 "running_score": round(score, 3),
-                "length_m": lookup[arc.edge_id][2],
+                "length_m": info.length_m,
+                "gain_m": round(gain_m, 2),
+                "loss_m": round(loss_m, 2),
                 "geometry": arc_geometry(net, arc, lookup),
             }
         )
@@ -108,41 +170,72 @@ def route_gdf(route: Route) -> gpd.GeoDataFrame:
 # --------------------------------------------------------------------------------------
 
 
+def leg_label(row) -> str:
+    """How one arc is named on a cue sheet: bushwhacks are anonymous, trails are not."""
+    return "BUSHWHACK" if row.off_trail else row.name
+
+
+def _group_arcs(detail: pd.DataFrame, key_fn: Callable[[object], object]) -> list[dict]:
+    """Collapse runs of consecutive arcs sharing a key into legs.
+
+    ``key_fn(row)`` decides what counts as one leg. The cue sheet keys on the printed
+    label alone, so a trail walked straight through reads as a single instruction. The
+    web export additionally keys on traversal category, because a first pass and an
+    immediately following repeat of the same trail must stay separate rows rather than
+    merging into one leg that means two different things at once.
+    """
+    legs: list[dict] = []
+    for i, row in enumerate(detail.itertuples(index=False)):
+        key = key_fn(row)
+        if legs and legs[-1]["key"] == key:
+            leg = legs[-1]
+            leg["time_s"] += row.time_s
+            leg["length_m"] += row.length_m
+            leg["gain_m"] += row.gain_m
+            leg["loss_m"] += row.loss_m
+            leg["n_arcs"] += 1
+            # Running totals and the far end are whatever the *last* arc in the leg says.
+            leg["elapsed_s"] = row.elapsed_s
+            leg["to_node"] = row.to_node
+            leg["running_score"] = row.running_score
+            leg["running_miles"] = row.running_miles
+            leg["running_trails"] = row.running_trails
+        else:
+            legs.append(
+                {
+                    "key": key,
+                    # Legs are runs of consecutive arcs, so a start index and a count
+                    # locate this leg's arcs exactly — which is how the web export
+                    # stitches their geometry back together.
+                    "arc0": i,
+                    "segment": leg_label(row),
+                    "name": row.name,
+                    "cat": row.cat,
+                    "trail_id": row.trail_id,
+                    "off_trail": row.off_trail,
+                    "from_node": row.from_node,
+                    "to_node": row.to_node,
+                    "length_m": row.length_m,
+                    "gain_m": row.gain_m,
+                    "loss_m": row.loss_m,
+                    "time_s": row.time_s,
+                    "elapsed_s": row.elapsed_s,
+                    "running_miles": row.running_miles,
+                    "running_trails": row.running_trails,
+                    "running_score": row.running_score,
+                    "n_arcs": 1,
+                }
+            )
+    return legs
+
+
 def cue_sheet(route: Route) -> pd.DataFrame:
     """Collapse consecutive arcs on the same trail into one human-readable instruction."""
     detail = route_gdf(route)
     if detail.empty:
         return pd.DataFrame()
 
-    groups: list[dict] = []
-    for row in detail.itertuples(index=False):
-        label = "BUSHWHACK" if row.off_trail else row.name
-        if groups and groups[-1]["segment"] == label:
-            leg = groups[-1]
-            leg["time_s"] += row.time_s
-            leg["elapsed_s"] = row.elapsed_s
-            leg["to_node"] = row.to_node
-            leg["running_score"] = row.running_score
-            leg["running_miles"] = row.running_miles
-            leg["running_trails"] = row.running_trails
-            leg["length_m"] += row.length_m
-        else:
-            groups.append(
-                {
-                    "segment": label,
-                    "off_trail": row.off_trail,
-                    "from_node": row.from_node,
-                    "to_node": row.to_node,
-                    "length_m": row.length_m,
-                    "time_s": row.time_s,
-                    "elapsed_s": row.elapsed_s,
-                    "running_miles": row.running_miles,
-                    "running_trails": row.running_trails,
-                    "running_score": row.running_score,
-                }
-            )
-
-    out = pd.DataFrame(groups)
+    out = pd.DataFrame(_group_arcs(detail, leg_label))
     out.insert(0, "leg", range(1, len(out) + 1))
     out["miles"] = (out["length_m"] / 1609.344).round(2)
     out["leg_min"] = (out["time_s"] / 60).round(1)
@@ -224,20 +317,32 @@ def write_geopackage(
     path: Path = GPKG_PATH,
     trails: gpd.GeoDataFrame | None = None,
 ):
-    """Write every layer into one OGC GeoPackage."""
-    if path.exists():
-        path.unlink()
+    """Write every layer into one OGC GeoPackage.
+
+    Written to a sibling temp file and swapped into place, rather than unlinking the
+    target first. On Windows a GeoPackage that any other program has open — marimo, QGIS,
+    a stray notebook kernel — cannot be deleted, and the old code's ``path.unlink()``
+    raised ``PermissionError`` and took the entire export down with it, discarding a
+    finished optimization run. A locked output should cost you that one file, nothing more.
+    """
+    tmp_path = path.with_suffix(".gpkg.tmp")
+    if tmp_path.exists():
+        try:
+            tmp_path.unlink()
+        except OSError:
+            tmp_path = path.with_suffix(f".{os.getpid()}.gpkg.tmp")
+    write_path = tmp_path
 
     edges = net.edges.copy()
     # GeoPackage has no nested types, and pandas NA in an int column upsets the driver.
     edges["trail_id"] = pd.to_numeric(edges["trail_id"], errors="coerce")
-    edges.to_file(path, layer="edges", driver="GPKG")
+    edges.to_file(write_path, layer="edges", driver="GPKG")
 
-    net.nodes.to_file(path, layer="nodes", driver="GPKG")
+    net.nodes.to_file(write_path, layer="nodes", driver="GPKG")
 
     connectors = edges[edges["off_trail"]]
     if len(connectors):
-        connectors.to_file(path, layer="connectors", driver="GPKG")
+        connectors.to_file(write_path, layer="connectors", driver="GPKG")
 
     if trails is None and TRAILS_RAW.exists():
         trails = gpd.read_parquet(TRAILS_RAW)
@@ -245,17 +350,32 @@ def write_geopackage(
         # gpx_ele_m is a variable-length list per row — not representable in GPKG.
         trails.drop(columns=[c for c in ("gpx_ele_m",) if c in trails.columns]).to_crs(
             CRS_PROJECTED
-        ).to_file(path, layer="trails", driver="GPKG")
+        ).to_file(write_path, layer="trails", driver="GPKG")
 
     depot = net.nodes[net.nodes.get("is_depot", False) == True]  # noqa: E712
     if len(depot):
-        depot.to_file(path, layer="depot", driver="GPKG")
+        depot.to_file(write_path, layer="depot", driver="GPKG")
 
     if route is not None and route.arcs:
-        route_gdf(route).to_file(path, layer="route", driver="GPKG")
+        route_gdf(route).to_file(write_path, layer="route", driver="GPKG")
         gpd.GeoDataFrame(
             [route.evaluate()], geometry=[route_geometry(route)], crs=CRS_PROJECTED
-        ).to_file(path, layer="route_line", driver="GPKG")
+        ).to_file(write_path, layer="route_line", driver="GPKG")
+
+    try:
+        os.replace(write_path, path)
+    except OSError as exc:
+        # The target is open in another program (marimo, QGIS, a notebook kernel). Keep
+        # the freshly written file rather than losing it, and say exactly what to do.
+        log.error(
+            "could not replace %s (%s). The new GeoPackage is complete and saved as %s — "
+            "close whatever has %s open and rename it, or delete the old file first.",
+            path.name,
+            exc.__class__.__name__,
+            write_path.name,
+            path.name,
+        )
+        return write_path
 
     log.info("wrote %s", path.name)
     return path
@@ -409,18 +529,218 @@ def write_interactive_map(
     return path
 
 
+#: USGS aerial imagery, XYZ tiles. Note ArcGIS orders the path {z}/{y}/{x}, not {z}/{x}/{y}.
+USGS_IMAGERY_TILE = (
+    "https://basemap.nationalmap.gov/arcgis/rest/services/"
+    "USGSImageryOnly/MapServer/tile/{z}/{y}/{x}"
+)
+
+
+def _lonlat_to_tile(lon: float, lat: float, zoom: int) -> tuple[float, float]:
+    import math
+
+    n = 2.0**zoom
+    x = (lon + 180.0) / 360.0 * n
+    lat_rad = math.radians(lat)
+    y = (1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n
+    return x, y
+
+
+#: Deepest zoom USGS publishes for this area. Requesting z17+ returns 404 for every tile,
+#: which silently yields a solid black mosaic if the failures are not surfaced.
+USGS_IMAGERY_MAX_ZOOM = 16
+
+
+def _fetch_imagery(bounds_wgs84, zoom: int = USGS_IMAGERY_MAX_ZOOM, max_tiles: int = 64):
+    """Mosaic USGS imagery tiles covering a lon/lat bbox.
+
+    Returns ``(rgb_array, extent)`` where extent is in lon/lat for imshow. Zoom is stepped
+    down automatically rather than blindly fetching hundreds of tiles, and a mostly-failed
+    mosaic raises rather than quietly returning a black rectangle that looks like imagery.
+    """
+    import math
+
+    import numpy as np
+    import requests
+    from PIL import Image
+
+    minx, miny, maxx, maxy = bounds_wgs84
+    while zoom > 8:
+        x0f, y0f = _lonlat_to_tile(minx, maxy, zoom)
+        x1f, y1f = _lonlat_to_tile(maxx, miny, zoom)
+        nx = int(math.floor(x1f)) - int(math.floor(x0f)) + 1
+        ny = int(math.floor(y1f)) - int(math.floor(y0f)) + 1
+        if nx * ny <= max_tiles:
+            break
+        zoom -= 1
+
+    x0, y0 = int(math.floor(x0f)), int(math.floor(y0f))
+    x1, y1 = int(math.floor(x1f)), int(math.floor(y1f))
+    nx, ny = x1 - x0 + 1, y1 - y0 + 1
+
+    zoom = min(zoom, USGS_IMAGERY_MAX_ZOOM)
+
+    mosaic = Image.new("RGB", (256 * nx, 256 * ny))
+    session = requests.Session()
+    ok = failed = 0
+    for ix in range(nx):
+        for iy in range(ny):
+            url = USGS_IMAGERY_TILE.format(z=zoom, x=x0 + ix, y=y0 + iy)
+            try:
+                resp = session.get(url, timeout=30)
+                resp.raise_for_status()
+                if "image" not in resp.headers.get("Content-Type", ""):
+                    raise ValueError(f"non-image response ({resp.headers.get('Content-Type')})")
+                from io import BytesIO
+
+                mosaic.paste(Image.open(BytesIO(resp.content)).convert("RGB"), (256 * ix, 256 * iy))
+                ok += 1
+            except Exception as exc:  # noqa: BLE001 - one missing tile is not fatal
+                failed += 1
+                log.debug("tile %s failed: %s", url, exc)
+
+    if ok == 0:
+        raise RuntimeError(
+            f"every imagery tile failed at zoom {zoom} ({failed} tiles) — refusing to "
+            "return a black mosaic that would look like valid imagery"
+        )
+    if failed > ok:
+        log.warning("imagery mosaic is mostly empty: %d ok, %d failed at zoom %d", ok, failed, zoom)
+
+    def _tile_to_lon(x):
+        return x / 2.0**zoom * 360.0 - 180.0
+
+    def _tile_to_lat(y):
+        n = math.pi - 2.0 * math.pi * y / 2.0**zoom
+        return math.degrees(math.atan(math.sinh(n)))
+
+    extent = (
+        _tile_to_lon(x0),
+        _tile_to_lon(x1 + 1),
+        _tile_to_lat(y1 + 1),
+        _tile_to_lat(y0),
+    )
+    return np.asarray(mosaic), extent
+
+
+def plot_connector_review(
+    net: Network,
+    route: Route | None = None,
+    path: Path = CONNECTOR_REVIEW_PATH,
+    *,
+    pad_m: float = 120.0,
+    dpi: int = 130,
+):
+    """One panel per bushwhack connector, drawn over USGS aerial imagery.
+
+    The point is to check the connectors against reality: does each one cross ground a
+    person could actually walk, and does it avoid water? The cost surface says yes, but a
+    cost surface built from a bare-earth DEM knows nothing about rhododendron thickets,
+    cliffs below its vertical resolution, or private property.
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    edges = net.edges
+    if route is not None and route.arcs:
+        used = {a.edge_id for a in route.arcs if a.off_trail}
+        connectors = edges[edges["edge_id"].isin(used)]
+        title_kind = "connectors used by the optimal route"
+    else:
+        connectors = edges[edges["off_trail"]]
+        title_kind = "all candidate connectors"
+
+    connectors = connectors[connectors["length_m"] > 20].copy()
+    if connectors.empty:
+        log.info("no connectors long enough to review")
+        return None
+
+    connectors = connectors.sort_values("length_m", ascending=False)
+    n = len(connectors)
+    cols = min(3, n)
+    rows = (n + cols - 1) // cols
+    fig, axes = plt.subplots(rows, cols, figsize=(5.4 * cols, 5.2 * rows), squeeze=False)
+
+    trails_wgs = edges[~edges["off_trail"]].to_crs(CRS_GEOGRAPHIC)
+
+    for ax, row in zip(axes.ravel(), connectors.itertuples(index=False)):
+        buffered = gpd.GeoSeries([row.geometry], crs=edges.crs).buffer(pad_m)
+        bounds = gpd.GeoSeries(buffered, crs=edges.crs).to_crs(CRS_GEOGRAPHIC).total_bounds
+        try:
+            img, extent = _fetch_imagery(tuple(bounds))
+            ax.imshow(img, extent=extent, origin="upper")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("imagery fetch failed for %s: %s", row.name, exc)
+
+        clip = trails_wgs.cx[bounds[0] : bounds[2], bounds[1] : bounds[3]]
+        if len(clip):
+            clip.plot(ax=ax, color="#00e5ff", linewidth=2.0, alpha=0.9)
+
+        line = gpd.GeoSeries([row.geometry], crs=edges.crs).to_crs(CRS_GEOGRAPHIC)
+        line.plot(ax=ax, color="#ff2d2d", linewidth=3.0, linestyle="--")
+
+        ax.set_xlim(bounds[0], bounds[2])
+        ax.set_ylim(bounds[1], bounds[3])
+        ax.set_title(
+            f"{row.name}\n{row.length_m:.0f} m  |  {row.time_fwd_s / 60:.1f} min out, "
+            f"{row.time_rev_s / 60:.1f} min back",
+            fontsize=9,
+        )
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    for ax in axes.ravel()[n:]:
+        ax.set_axis_off()
+
+    fig.suptitle(
+        f"Bushwhack review — {title_kind}\n"
+        "red dashed = off-trail connector,  cyan = mapped trail,  imagery © USGS",
+        fontsize=12,
+    )
+    fig.tight_layout()
+    fig.savefig(path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+    log.info("wrote %s (%d connectors)", path.name, n)
+    return path
+
+
 def export_all(net: Network, route: Route | None = None) -> dict[str, Path]:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    written = {"geopackage": write_geopackage(net, route)}
-    if route is not None and route.arcs:
-        written["gpx"] = write_gpx(route)
+    def _write_cues():
         cues = cue_sheet(route)
         cues.to_csv(CUES_PATH, index=False)
-        written["cues"] = CUES_PATH
         log.info("cue sheet:\n%s", cues.to_string(index=False))
-    written["map"] = plot_route(net, route)
-    try:
-        written["interactive_map"] = write_interactive_map(net, route)
-    except Exception as exc:  # noqa: BLE001 - a missing basemap must not fail the run
-        log.warning("interactive map skipped (%s)", exc)
+        return CUES_PATH
+
+    has_route = route is not None and route.arcs
+    steps: list[tuple[str, callable]] = [
+        ("geopackage", lambda: write_geopackage(net, route)),
+        ("map", lambda: plot_route(net, route)),
+    ]
+    if has_route:
+        steps += [("gpx", lambda: write_gpx(route)), ("cues", _write_cues)]
+    steps += [
+        ("interactive_map", lambda: write_interactive_map(net, route)),
+        ("connector_review", lambda: plot_connector_review(net, route)),
+    ]
+
+    # Each artifact is written independently. A locked output file or an unreachable
+    # basemap should cost that one artifact, never the whole export — an earlier version
+    # let a single PermissionError discard the results of a 20-minute optimization.
+    written: dict[str, Path] = {}
+    failed: list[str] = []
+    for label, fn in steps:
+        try:
+            result = fn()
+            if result is not None:
+                written[label] = result
+        except Exception as exc:  # noqa: BLE001
+            failed.append(label)
+            log.error("export step %r failed: %s: %s", label, exc.__class__.__name__, exc)
+
+    if failed:
+        log.warning("export finished with %d of %d artifacts: failed = %s",
+                    len(written), len(steps), ", ".join(failed))
     return written

@@ -49,10 +49,51 @@ Deliverables land in `outputs/`:
   `connectors`, `route`, `depot`
 - `route.gpx` — the tour as a GPX track with a predicted schedule, loadable onto a watch
 - `route_cues.csv` — turn-by-turn cue sheet with running time and running score
-- `route_map.html` — interactive Leaflet map on USGS topo/imagery layers. This is the tool
-  for checking the model against reality: every bushwhack connector can be inspected on
-  satellite imagery to confirm it crosses ground a person could actually walk
+- `route_map.html` — interactive Leaflet map on USGS topo/imagery layers, for checking the
+  model against reality
+- `connector_review.png` — every bushwhack the route uses, drawn over USGS aerial imagery.
+  Worth looking at before trusting any run; it is what caught the private-property bug
 - `route_map.png`, `run_report.json`
+
+## Stepping through the race
+
+`docs/` is a static site that walks the optimized route one leg at a time: the map fills in
+as you step, and the sidebar counts up the miles, the trails completed and the score. It is
+the fastest way to see *why* the route is shaped the way it is — where the plan spends a
+repeat to reach something worth more, and where it gives up on a trail entirely.
+
+The left-hand **pace factor** control switches between six pre-solved itineraries. Pace is
+the one parameter a racer can neither measure in advance nor control on the day: Tobler's
+constants describe unhurried walking, and how much quicker a fit competitor actually moves
+is a guess. Sweeping it shows how much the plan depends on that guess.
+
+Underneath sits the printed **tanZnavigation Pandapas Pond sheet**, georeferenced on
+[MapWarper](https://mapwarper.net/maps/110238) and faded in over USGS topo, imagery or
+hillshade. It is the map racers actually carry, so it is the one worth checking a route
+against — a line that looks reasonable on a DEM can still cross something the paper map
+knows about.
+
+Each itinerary is solved independently and shipped as JSON:
+
+```bash
+pixi run presets              # solve all six pace factors, write docs/data/
+python -m http.server -d docs # then open http://localhost:8000
+```
+
+Everything the page needs is computed in [`src/hullabaloo/webexport.py`](src/hullabaloo/webexport.py)
+— geometry, traversal categories and running totals all arrive precomputed, so the
+JavaScript is a renderer and nothing more. `write_preset` refuses to publish an itinerary
+whose numbers do not reconcile, since a static file is trusted by readers who will never
+run the solver.
+
+One subtlety worth naming: the sweep re-times the bushwhack connectors as well as the
+trails. `build_network` reads connector times straight off the connector table, so
+re-pricing only the trails would leave every bushwhack frozen at the pace that built the
+file — a mixed-pace model that still solves cleanly and looks entirely plausible. Because a
+uniform pace multiplier leaves the cost surface's *relative* costs untouched, the connector
+paths themselves never change, so they can be re-timed along stored geometry rather than
+re-routed. A test asserts that re-timing at the stored pace reproduces the stored file
+exactly.
 
 ## Running it
 
@@ -62,7 +103,8 @@ cp .env.example .env          # then set TNT_USER / TNT_PASS
 
 pixi run pipeline             # end to end; skips stages whose output exists
 pixi run pipeline-bounded     # also spends 10 min proving an optimality bound
-pixi run test                 # 21 tests
+pixi run presets              # solve one itinerary per pace factor for the web viz
+pixi run test                 # 32 tests
 pixi run app                  # interactive marimo app
 ```
 
@@ -96,7 +138,32 @@ it. Every junction that exists only above 10 m was then reviewed individually ag
 imagery (`topology.junctions_in_band`) — each is a real intersection where two
 independently recorded tracks disagree by plausible under-canopy GPS error.
 
-### 2. The network is in three pieces
+**Independent check against OSM.** OpenStreetMap is *node-based*: editors connect ways by
+reusing a node id, so junctions there are explicit rather than inferred. That makes OSM an
+excellent control — a different method on different source data. Comparing:
+
+| tolerance | our junctions confirmed by OSM | OSM shared nodes matched by ours |
+|---|---|---|
+| 10 m | 71.0% | 28.3% |
+| 20 m | **82.6%** | 33.3% |
+| 30 m | 89.9% | 40.0% |
+
+83% of the junctions derived by snapping GPX tracks are independently confirmed. The
+reverse column is low for a benign reason: OSM also splits ways wherever a tag changes
+(surface, access), so consecutive pieces of one logical trail share a node too, and many
+OSM junctions involve paths that are not among the 40 scored trails.
+
+**Why not just build the whole network from OSM?** It is a fair question — OSM's topology
+is correct by construction, which would delete most of this phase. OSM covers **99.8%** of
+the official trail geometry within 25 m, so the geometry is there. The obstacle is
+*identity*: scoring is defined over the event's own 40 trails, and only 26 of 40 match an
+OSM way by name. Rebuilding on OSM would mean re-attaching scored identity by geometric
+matching, and any mislabelling silently corrupts the score. The current network validates
+cleanly — every trail contiguous, length preserved to 99.9%, 83% junction agreement — so
+OSM earns its keep here as a *validator* and as the source of the forest roads, rather than
+as a replacement for the official geometry.
+
+### 2. The network is in three pieces — and forest roads join them
 
 After noding, the 40 trails form **three components** separated by genuine 285–700 m gaps
 that no snapping will ever close:
@@ -107,21 +174,61 @@ that no snapping will ever close:
 | north | 7 | 5.8 |
 | west | 5 | 3.5 |
 
-So off-trail travel is not a refinement — without it, no route can score above the main
-component's ceiling. Connectors are least-cost paths over a Tobler-derived cost surface run
-at 60% speed, which brings the network to a single component.
+My first instinct was to bridge them by bushwhacking, and I built a whole least-cost
+off-trail model to do it. That was solving the wrong problem. The gaps are spanned by
+**forest service roads** — legal, full speed, and already on the ground.
 
-Two things this phase needs to get right:
+Finding them took two sources, and the difference between them is the interesting part:
+
+- **USFS EDW road layers** are authoritative for *National Forest System* roads, but they
+  are a systems inventory and omit non-system roads. They place `BRUSH MOUNTAIN` 2.6 km
+  from the nearest trail and leave the entire northern component 887 m from any road.
+- **OpenStreetMap `highway=track`** has the roads people actually walk. One 0.78 mi
+  segment links **Beauty ↔ Crosscut ↔ Highway**, joining the northern component to the
+  main one; another reaches Upper Chimney; a third bridges the western component.
+
+Adding **3.9 miles of road** collapses the network from three components to **one**, and
+drops cross-component bushwhack candidates from 44 to **zero**. Roads earn no points —
+they are not among the 40 scored trails — but they cost full-speed time instead of the 60%
+off-trail penalty, which is why they dominate bushwhacking so completely.
+
+Bushwhack connectors are still modelled and still available to the optimizer as pure
+shortcuts. They are simply no longer load-bearing.
+
+Where bushwhacking *is* modelled, three things need to be right:
 
 - **Water must be masked.** Pandapas Pond sits in the middle of the study area, and a cost
   surface that ignores it routes straight across open water. NHD hydrography contributes
   4.7 ha of impassable cells. An earlier flatness-based fallback heuristic flagged **20% of
   the map** as water; the code now rejects any fallback mask claiming more than 2% of the
   area rather than silently warping every connector.
+- **So must developed land** — see below. This one was only caught by looking at imagery.
 - **`MCP_Geometric` is isotropic.** It prices cells by slope *magnitude*, so path selection
   treats up and down alike. True directional Tobler time is re-integrated along the returned
   polyline, restoring asymmetry in the routing graph. `MCP_Flexible` is the fully
   anisotropic upgrade if that ever matters.
+
+### The bug that only aerial imagery could catch
+
+Every automated check passed. The connectors avoided water, respected slope limits, ran at
+a plausible 0.56× on-trail speed, and the network validated cleanly. Then rendering them
+over USGS aerial imagery showed the optimal route's **longest bushwhack running 848 m
+straight through a residential neighbourhood** — houses, driveways, mown lawns, a swimming
+pool. NLCD confirms 17% of that corridor is Developed.
+
+The cause is structural: the cost surface comes from a **bare-earth** DEM, which is by
+definition the terrain with buildings and vegetation stripped out. Where the houses are,
+it sees a gentle, inviting slope. No amount of slope or hydrography checking finds this,
+because the input simply does not contain the information.
+
+The fix is NLCD land cover, with developed classes (21–24) marked impassable — 5.4% of the
+study area. Connectors drop from 80 to 57, the network stays connected, and **the route
+loses 0.057 points** (35.370 → 35.313). The illegal shortcut was worth almost nothing;
+it was just invisible to every check that did not involve looking at a photograph.
+
+`outputs/connector_review.png` now renders every connector the route uses over aerial
+imagery, and a test asserts no connector spends more than a quarter of its length on
+developed land.
 
 The realised off-trail speed comes out at 0.56× on-trail rather than the nominal 0.60×,
 because connectors cut across slopes that graded trail contours around.
@@ -219,9 +326,17 @@ src/hullabaloo/
   optimize_alns.py destroy/repair search with SA acceptance
   optimize_milp.py exact formulation, for the bound
   export.py        GeoPackage / GPX / cue sheet / map
+  webexport.py     itinerary + network JSON for the web planner
   pipeline.py      end-to-end runner
+scripts/
+  build_presets.py solve one itinerary per pace factor
 notebooks/         marimo (.py, git-diffable)
-tests/             21 tests
+docs/              static route planner, served by GitHub Pages
+  index.html       panes, controls
+  css/style.css    light + dark theme
+  js/viz.js        Leaflet rendering and step state
+  data/            network.json + one preset per pace factor
+tests/             32 tests
 ```
 
 Logic lives in `src/`, notebooks import it. Notebooks stay readable, functions stay
@@ -239,8 +354,11 @@ Working CRS is **EPSG:6346** (NAD83(2011) / UTM 17N, metres), matching the lidar
 - **Tobler is uncalibrated.** The constants are from the literature, not from anyone's
   actual pace over seven hours with a pack. Fitting `base`/`k` to real Strava times on
   these trails would be the single highest-value improvement.
-- **Bushwhack legality is assumed.** Confirm off-trail travel is permitted; setting
-  `off_trail_factor` very low approximates a trail-only scenario.
+- **Bushwhack legality is only partly modelled.** NLCD developed land is now excluded, but
+  NLCD is 30 m and knows nothing about parcel boundaries, posted land, or the difference
+  between open hardwood and impenetrable rhododendron. Confirm off-trail travel is
+  permitted at all, and eyeball `connector_review.png` before committing to a route.
+  Setting `off_trail_factor` very low approximates a trail-only scenario.
 - **The lidar is 2016/17 vintage** and predates any recent trail work.
 - **The three components may be joined by forest roads absent from the dataset.** Worth
   checking the gaps against imagery; a real road should be added as a full-speed connector
