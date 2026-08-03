@@ -392,22 +392,55 @@ def write_geopackage(
 
 
 def plot_route(net: Network, route: Route | None, path: Path = MAP_PATH, dpi: int = 150):
-    """Static overview map: whole network, the route, connectors used, and the start."""
+    """Static overview map: whole network, the route, the roads it links up, and the start.
+
+    Trail and road are split on ``is_road`` rather than ``off_trail``. Those used to be the
+    same question and no longer are: roads are walked at full speed, so nothing off-trail
+    survives, and splitting on ``off_trail`` would now draw every road as though it were
+    scored trail — overstating the route by the couple of miles of road it actually walks.
+    """
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+
+    def road_mask(frame):
+        if "is_road" in frame:
+            return frame["is_road"].fillna(False).astype(bool)
+        return frame["off_trail"].astype(bool)
 
     fig, ax = plt.subplots(figsize=(11, 9))
-    on_trail = net.edges[~net.edges["off_trail"]]
-    on_trail.plot(ax=ax, color="#c9ccd1", linewidth=1.1, zorder=1)
+    edges = net.edges
+    edges[~road_mask(edges)].plot(ax=ax, color="#c9ccd1", linewidth=1.1, zorder=1)
+    edges[road_mask(edges)].plot(
+        ax=ax, color="#e4d5c9", linewidth=1.1, linestyle=(0, (4, 2)), zorder=1
+    )
+
+    handles = [
+        Line2D([], [], color="#c9ccd1", lw=2, label="trail network (unused)"),
+        Line2D([], [], color="#e4d5c9", lw=2, ls="--", label="road (unused)"),
+    ]
 
     if route is not None and route.arcs:
         used = route_gdf(route)
-        used[~used["off_trail"]].plot(ax=ax, color="#1f77b4", linewidth=2.6, zorder=3)
-        bush = used[used["off_trail"]]
+        is_road = road_mask(used)
+        used[~is_road].plot(ax=ax, color="#1f77b4", linewidth=2.6, zorder=3)
+        handles.append(Line2D([], [], color="#1f77b4", lw=3, label="route on trail"))
+        roads = used[is_road]
+        if len(roads):
+            roads.plot(ax=ax, color="#c0392b", linewidth=2.4, zorder=4)
+            handles.append(
+                Line2D([], [], color="#c0392b", lw=3, label="route on road — no points")
+            )
+        # Only drawn when one exists. Every published route is now on trail or road, but a
+        # legend entry for a category with nothing in it invites the reader to go looking.
+        bush = used[used["off_trail"].astype(bool)]
         if len(bush):
-            bush.plot(ax=ax, color="#d62728", linewidth=2.2, linestyle="--", zorder=4)
+            bush.plot(ax=ax, color="#d62728", linewidth=2.2, linestyle="--", zorder=5)
+            handles.append(
+                Line2D([], [], color="#d62728", lw=3, ls="--", label="off-trail connector")
+            )
 
     depot = net.nodes[net.nodes.get("is_depot", False) == True]  # noqa: E712
     if len(depot):
@@ -423,18 +456,10 @@ def plot_route(net: Network, route: Route | None, path: Path = MAP_PATH, dpi: in
     ax.set_title(title, fontsize=13)
     ax.set_axis_off()
 
-    from matplotlib.lines import Line2D
-
-    ax.legend(
-        handles=[
-            Line2D([], [], color="#c9ccd1", lw=2, label="trail network (unused)"),
-            Line2D([], [], color="#1f77b4", lw=3, label="route on trail"),
-            Line2D([], [], color="#d62728", lw=3, ls="--", label="bushwhack connector"),
-            Line2D([], [], color="#2ca02c", marker="*", ls="", ms=14, label="start / finish"),
-        ],
-        loc="lower right",
-        frameon=False,
+    handles.append(
+        Line2D([], [], color="#2ca02c", marker="*", ls="", ms=14, label="start / finish")
     )
+    ax.legend(handles=handles, loc="lower right", frameon=False)
     fig.tight_layout()
     fig.savefig(path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)

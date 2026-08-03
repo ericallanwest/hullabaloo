@@ -29,8 +29,8 @@ tour must start and finish at the trailhead.
 | **MILP — proven optimal** | **48.23** | **26** | **22.23** | **7.00 h** |
 
 **The problem is solved to proven global optimality.** HiGHS closed the gap to 0.00% in
-65 s: no 7-hour route scores better than **48.23**, and the route uses the full budget to
-the second.
+about a minute: no 7-hour route scores better than **48.23**, and the route uses the full
+budget to the second.
 
 That is a **14% improvement** over a sensible greedy baseline — a much narrower margin than
 this project reported before the forest roads went in, and the narrowing is real rather than
@@ -41,7 +41,8 @@ moves right.
 
 The heuristic is not wasted — it reached 47.889, **within 0.7%** of the optimum, in a few
 minutes, and its incumbent is fed to the solver as a valid primal cut that prunes the search
-hard.
+hard. All six seeds landed between 46.19 and 47.89, so the search finds the right basin
+reliably rather than getting lucky on one of them.
 
 Worth noting how the heuristic gets there: its solution encoding *targets* only 18 trails,
 yet the decoded route *completes* 26. The extra eight are collected for free on deadhead legs
