@@ -24,16 +24,19 @@ const MAPWARPER_BOUNDS = [[37.2329516, -80.5472426], [37.2920102, -80.4451182]];
 // from vanishing when a deeper basemap is selected.
 const MAPWARPER_NATIVE_ZOOM = 16;
 
-// Page 2 of the printed sheet, drawn at roughly 1:10000 against Page 1's 1:20000 — twice
-// the detail over a smaller area. Set the id once it is georeferenced, and fill in the
-// bounds from the MapWarper API (the `bbox` field of /api/v1/maps/<id>).
+// Page 2 of the printed sheet — "McDonald Hollow / Stonecutter Hollow", drawn at roughly
+// 1:10000 against Page 1's 1:20000, so twice the detail over about a quarter of the area.
 //
 // The two sheets need no cross-fading or zoom switching to coexist: this one is bounded
 // to its own extent and stacks above Page 1, so it paints only where it has coverage and
 // simply reveals Page 1 everywhere else. Both sliders stay independent.
-const MAPWARPER_ID_2 = null;
-const MAPWARPER_2_BOUNDS = MAPWARPER_BOUNDS;   // replace with Page 2's own extent
-const MAPWARPER_2_NATIVE_ZOOM = 17;            // one more zoom of real detail than Page 1
+const MAPWARPER_ID_2 = 110277;
+// bbox from /api/v1/maps/110277, reordered to Leaflet's [[south, west], [north, east]].
+const MAPWARPER_2_BOUNDS = [[37.2315110, -80.5009348], [37.2609191, -80.4497400]];
+// Same 5100x3300 scan over roughly a quarter of Page 1's ground, so one zoom level deeper
+// before MapWarper starts upscaling: z17 asks for ~4770 px of tiles across 5100 px of
+// source, and z18 would ask for nearly double what the scan actually contains.
+const MAPWARPER_2_NATIVE_ZOOM = 17;
 
 const CAT_COLOR = { unique: '#f7882f', offtrail: '#c0392b', repeat: '#c0392b' };
 const CAT_LABEL = { unique: '', offtrail: 'road', repeat: 'repeat' };

@@ -117,6 +117,24 @@ USFS_ROAD_SERVICE = (
     "https://apps.fs.usda.gov/arcx/rest/services/EDW/EDW_RoadBasic_01/MapServer/{layer}/query"
 )
 
+#: Ways the bounding-box query drags in that are not part of the race, keyed by OSM way id
+#: with the reason. Keyed by id and not name because "Forest road" is a fallback label this
+#: module invents for unnamed tracks, and it currently covers twelve distinct ways — a
+#: name-based denylist could not tell them apart.
+#:
+#: Each entry has to clear the same bar: **no published route uses it at any pace**. That
+#: is checked rather than assumed (:func:`~hullabaloo.presets` re-solves after pruning and
+#: every score must be unchanged), because an edge no optimum wants is free to remove,
+#: while an edge some optimum wants is not — and taste is no way to tell those apart.
+EXCLUDED_ROAD_WAYS = {
+    306707113: "Woods & Field — north of Glade Road, outside the race area entirely",
+    20366042: "Poverty Creek Connector — a user-created trail the Forest Service discourages",
+    59204562: (
+        "Meadowbrook Drive east of the trail network — the arm running out to Glade Road. "
+        "Only a 21 m stub survives the clip, and it leads away from every trail"
+    ),
+}
+
 
 def fetch_osm_roads(bounds_wgs84, path=OSM_ROADS_PATH, *, force: bool = False):
     """Forest tracks from OpenStreetMap, cached to disk."""
@@ -383,6 +401,16 @@ def load_roads(trails: gpd.GeoDataFrame, *, force: bool = False) -> gpd.GeoDataF
     padded = (bounds[0] - pad, bounds[1] - pad, bounds[2] + pad, bounds[3] + pad)
 
     osm = fetch_osm_roads(padded, force=force)
+
+    # Dropped here rather than in the Overpass query: the query is cached to disk, so
+    # filtering at fetch time would bake the decision into the cache and make revisiting it
+    # require a refetch. This way the raw download stays a faithful record of what OSM says.
+    excluded = osm["osm_id"].isin(EXCLUDED_ROAD_WAYS)
+    if excluded.any():
+        for way_id in osm.loc[excluded, "osm_id"]:
+            log.info("excluding OSM way %d: %s", way_id, EXCLUDED_ROAD_WAYS[way_id])
+        osm = osm[~excluded]
+
     roads = roads_near_network(osm, trails)
     roads["road"] = True
     return roads

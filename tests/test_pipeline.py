@@ -296,6 +296,27 @@ def test_meadowbrook_is_continuous_but_stops_short_of_glade_road():
     assert pieces == 1, f"Meadowbrook Drive is in {pieces} disconnected pieces, expected 1"
 
 
+def test_the_excluded_ways_stayed_out_and_took_nothing_with_them():
+    """The denylist must remove exactly what it names, and nothing adjacent.
+
+    A denylist is the easiest place in this pipeline to do quiet damage: an over-broad
+    entry silently deletes ground the optimizer needed, and the only symptom is a score
+    that drops for reasons nobody attributes to pruning. So this checks both directions —
+    the named ways are gone, *and* the roads that share their neighbourhood survive intact.
+    """
+    from hullabaloo.roads import EXCLUDED_ROAD_WAYS
+
+    edges = _load(EDGES)
+    names = set(edges["name"])
+    for gone in ("Woods & Field", "Poverty Creek Connector"):
+        assert gone not in names, f"{gone} is on the denylist but reached the network"
+
+    # Meadowbrook is excluded by *way*, not by name: one of its two OSM ways is dropped and
+    # the other is load-bearing. Asserting the name is absent would be exactly wrong here.
+    assert MEADOWBROOK in names, "the denylist took the wrong half of Meadowbrook Drive"
+    assert 59204562 in EXCLUDED_ROAD_WAYS and 490214836 not in EXCLUDED_ROAD_WAYS
+
+
 def test_roads_cost_time_but_score_nothing():
     edges = _load(EDGES_TIMED)
     roads = edges[edges["is_road"] == True]  # noqa: E712
