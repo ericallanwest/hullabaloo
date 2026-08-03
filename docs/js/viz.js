@@ -103,6 +103,14 @@ function esc(text) {
 
 const $ = id => document.getElementById(id);
 
+// Revalidate the data files rather than trusting the browser's copy. GitHub Pages serves
+// these with Cache-Control: max-age=600, so after a re-solve a returning visitor would
+// otherwise be shown a stale itinerary for up to ten minutes — silently, and with the
+// numbers all self-consistent, which is the worst kind of wrong. "no-cache" still uses
+// the cached body when the server answers 304, so this costs a conditional request, not a
+// re-download.
+const FETCH_OPTS = { cache: 'no-cache' };
+
 // ── Module-level state ─────────────────────────────────────────────────────
 let map;
 let NETWORK = null;     // network.json, loaded once
@@ -396,7 +404,7 @@ async function loadPreset(pace) {
   errEl.style.display = 'none';
   try {
     if (!NETWORK) {
-      NETWORK = await fetch(NETWORK_URL).then(r => {
+      NETWORK = await fetch(NETWORK_URL, FETCH_OPTS).then(r => {
         if (!r.ok) throw new Error('trail network failed to load');
         return r.json();
       });
@@ -409,7 +417,7 @@ async function loadPreset(pace) {
       goHome();
     }
     const file = presetFile(pace);
-    const preset = await fetch(file).then(r => {
+    const preset = await fetch(file, FETCH_OPTS).then(r => {
       if (!r.ok) throw new Error(`${file.split('/').pop()} not found — has it been solved yet?`);
       return r.json();
     });
