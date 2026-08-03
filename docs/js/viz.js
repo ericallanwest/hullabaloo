@@ -69,6 +69,19 @@ function fmtTimeOfDay(elapsedSeconds) {
   return `${hour12}:${String(minutes % 60).padStart(2, '0')}${hour24 >= 12 ? 'pm' : 'am'}`;
 }
 
+// Scores show one decimal, truncated rather than rounded: a tenth of a mile only pays
+// once it has actually been walked, so 21.38 miles is worth 21.3 points, not 21.4. The
+// hundredths place is real but the organizer will never score to it.
+//
+// The epsilon is defensive, not a fix for anything observed — checked against every exact
+// tenth from 0 to 80 and every cumulative score in all eleven presets, it never changes
+// the answer. It is here because a value landing a hair under a tenth through float error
+// would otherwise lose a point that was genuinely earned, and truncation has no rounding
+// slack to absorb that.
+function fmtScore(value) {
+  return (Math.floor(value * 10 + 1e-9) / 10).toFixed(1);
+}
+
 function fmtClock(s) {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
   return `${h}:${String(m).padStart(2, '0')}`;
@@ -119,7 +132,7 @@ function stepPopup(step) {
     `node ${step.from_node} → ${step.to_node}<br>` +
     `${step.miles.toFixed(2)} mi &nbsp; ${fmtMS(step.seconds)}<br>` +
     `+${step.gain_ft} ft ↑ / −${step.loss_ft} ft ↓<br>` +
-    `<small>step ${step.i} · ${fmtClock(step.cum.seconds)} elapsed · score ${step.cum.score.toFixed(2)}</small>`;
+    `<small>step ${step.i} · ${fmtClock(step.cum.seconds)} elapsed · score ${fmtScore(step.cum.score)}</small>`;
 }
 
 function addStepLine(group, step, options, arrowColor) {
@@ -197,7 +210,7 @@ function updateSidebar(step) {
   $('sbElev').textContent   =
     `${run.gain.toLocaleString()} ft ↑ / ${run.loss.toLocaleString()} ft ↓`;
   $('sbTrails').textContent = `${cum.trails_completed} of ${PRESET.network.n_trails}`;
-  $('sbScore').textContent  = cum.score.toFixed(2);
+  $('sbScore').textContent  = fmtScore(cum.score);
 
   $('stepLbl').textContent = `Step ${step} / ${PRESET.totals.n_steps}`;
   $('stepSlider').value = step;
@@ -236,7 +249,7 @@ function buildItinerary() {
       ${done ? ` <span class="itin-done">✓ ${done.length} trail${done.length > 1 ? 's' : ''}</span>` : ''}
       <span class="itin-meta">
         ${s.miles.toFixed(2)} mi &nbsp; ${fmtMS(s.seconds)} &nbsp; ${s.gain_ft} ft ↑ / ${s.loss_ft} ft ↓<br>
-        ${fmtTimeOfDay(s.cum.seconds)} &nbsp;·&nbsp; ${fmtClock(s.cum.seconds)} elapsed &nbsp;·&nbsp; score ${s.cum.score.toFixed(2)}
+        ${fmtTimeOfDay(s.cum.seconds)} &nbsp;·&nbsp; ${fmtClock(s.cum.seconds)} elapsed &nbsp;·&nbsp; score ${fmtScore(s.cum.score)}
       </span>
     </div>`;
   }).join('');
@@ -273,7 +286,7 @@ function renderPresetInfo() {
   else claim = '';
 
   $('presetInfo').innerHTML =
-    `<div class="info-row"><span>Score</span><span><b>${t.score.toFixed(2)}</b></span></div>` +
+    `<div class="info-row"><span>Score</span><span><b>${fmtScore(t.score)}</b></span></div>` +
     `<div class="info-row"><span>Trails completed</span><span><b>${t.trails_completed}</b></span></div>` +
     `<div class="info-row"><span>Unique miles</span><span><b>${t.unique_miles.toFixed(2)}</b></span></div>` +
     `<div class="info-row"><span>Distance walked</span><span><b>${t.walked_miles.toFixed(2)} mi</b></span></div>` +
