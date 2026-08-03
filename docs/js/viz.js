@@ -204,12 +204,21 @@ function updateSidebar(step) {
 
   const run = cumThrough(step);
   $('sbTotal').textContent  = `${cum.miles.toFixed(1)} mi / ${fmtHM(cum.seconds)}`;
-  $('sbUnique').textContent = `${cum.unique_miles.toFixed(1)} mi / ${fmtHM(run.unique)}`;
+  // Unique mileage truncates, unlike the pure distances around it, because it is also
+  // the scoring figure restated below — two rows labelled "unique" disagreeing would be
+  // plainly wrong, and this is the one row in the block that earns points. The mileage
+  // column does not reliably add up to Total either way: at one decimal place, rounding
+  // already breaks the sum on about 38% of steps.
+  $('sbUnique').textContent = `${fmtScore(cum.unique_miles)} mi / ${fmtHM(run.unique)}`;
   $('sbRepeat').textContent = `${cum.repeat_miles.toFixed(1)} mi / ${fmtHM(run.repeat)}`;
   $('sbOff').textContent    = `${cum.offtrail_miles.toFixed(1)} mi / ${fmtHM(run.offtrail)}`;
   $('sbElev').textContent   =
     `${run.gain.toLocaleString()} ft ↑ / ${run.loss.toLocaleString()} ft ↓`;
   $('sbTrails').textContent = `${cum.trails_completed} of ${PRESET.network.n_trails}`;
+  // Truncated like the score itself, so the block visibly adds up. It always does: score
+  // is trails plus unique miles, and trails is a whole number, so truncating the sum and
+  // truncating the mileage give the same tenth.
+  $('sbUniqueScore').textContent = fmtScore(cum.unique_miles);
   $('sbScore').textContent  = fmtScore(cum.score);
 
   $('stepLbl').textContent = `Step ${step} / ${PRESET.totals.n_steps}`;
