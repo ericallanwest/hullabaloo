@@ -267,9 +267,14 @@ def preset_filename(pace_factor: float) -> str:
 
 
 def edge_kind(row) -> str:
-    """``trail`` (scores), ``road`` (free to walk, worth nothing), or ``bushwhack``."""
+    """``trail`` (scores), ``road`` (free to walk, worth nothing), or ``offtrail``.
+
+    ``offtrail`` is now only ever the short link from the start line to the network. The
+    generated bushwhack connectors that used to share this label are gone — importing the
+    roads that were genuinely missing made every one of them unattractive.
+    """
     if row.off_trail:
-        return "bushwhack"
+        return "offtrail"
     return "trail" if pd.notna(row.trail_id) else "road"
 
 

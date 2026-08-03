@@ -33,7 +33,6 @@ GPX_PATH = OUTPUTS / "route.gpx"
 CUES_PATH = OUTPUTS / "route_cues.csv"
 MAP_PATH = OUTPUTS / "route_map.png"
 MAP_HTML_PATH = OUTPUTS / "route_map.html"
-CONNECTOR_REVIEW_PATH = OUTPUTS / "connector_review.png"
 
 
 # --------------------------------------------------------------------------------------
@@ -171,8 +170,14 @@ def route_gdf(route: Route) -> gpd.GeoDataFrame:
 
 
 def leg_label(row) -> str:
-    """How one arc is named on a cue sheet: bushwhacks are anonymous, trails are not."""
-    return "BUSHWHACK" if row.off_trail else row.name
+    """How one arc is named on a cue sheet.
+
+    This used to print "BUSHWHACK" for anything off-trail, because generated connectors
+    carried machine names like ``bushwhack 12-34`` that meant nothing to a racer. Those
+    are gone, and the only off-trail edge left is the ``depot access`` link from the start
+    line to the network — which has a perfectly good name of its own.
+    """
+    return row.name
 
 
 def _group_arcs(detail: pd.DataFrame, key_fn: Callable[[object], object]) -> list[dict]:
@@ -529,183 +534,6 @@ def write_interactive_map(
     return path
 
 
-#: USGS aerial imagery, XYZ tiles. Note ArcGIS orders the path {z}/{y}/{x}, not {z}/{x}/{y}.
-USGS_IMAGERY_TILE = (
-    "https://basemap.nationalmap.gov/arcgis/rest/services/"
-    "USGSImageryOnly/MapServer/tile/{z}/{y}/{x}"
-)
-
-
-def _lonlat_to_tile(lon: float, lat: float, zoom: int) -> tuple[float, float]:
-    import math
-
-    n = 2.0**zoom
-    x = (lon + 180.0) / 360.0 * n
-    lat_rad = math.radians(lat)
-    y = (1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n
-    return x, y
-
-
-#: Deepest zoom USGS publishes for this area. Requesting z17+ returns 404 for every tile,
-#: which silently yields a solid black mosaic if the failures are not surfaced.
-USGS_IMAGERY_MAX_ZOOM = 16
-
-
-def _fetch_imagery(bounds_wgs84, zoom: int = USGS_IMAGERY_MAX_ZOOM, max_tiles: int = 64):
-    """Mosaic USGS imagery tiles covering a lon/lat bbox.
-
-    Returns ``(rgb_array, extent)`` where extent is in lon/lat for imshow. Zoom is stepped
-    down automatically rather than blindly fetching hundreds of tiles, and a mostly-failed
-    mosaic raises rather than quietly returning a black rectangle that looks like imagery.
-    """
-    import math
-
-    import numpy as np
-    import requests
-    from PIL import Image
-
-    minx, miny, maxx, maxy = bounds_wgs84
-    while zoom > 8:
-        x0f, y0f = _lonlat_to_tile(minx, maxy, zoom)
-        x1f, y1f = _lonlat_to_tile(maxx, miny, zoom)
-        nx = int(math.floor(x1f)) - int(math.floor(x0f)) + 1
-        ny = int(math.floor(y1f)) - int(math.floor(y0f)) + 1
-        if nx * ny <= max_tiles:
-            break
-        zoom -= 1
-
-    x0, y0 = int(math.floor(x0f)), int(math.floor(y0f))
-    x1, y1 = int(math.floor(x1f)), int(math.floor(y1f))
-    nx, ny = x1 - x0 + 1, y1 - y0 + 1
-
-    zoom = min(zoom, USGS_IMAGERY_MAX_ZOOM)
-
-    mosaic = Image.new("RGB", (256 * nx, 256 * ny))
-    session = requests.Session()
-    ok = failed = 0
-    for ix in range(nx):
-        for iy in range(ny):
-            url = USGS_IMAGERY_TILE.format(z=zoom, x=x0 + ix, y=y0 + iy)
-            try:
-                resp = session.get(url, timeout=30)
-                resp.raise_for_status()
-                if "image" not in resp.headers.get("Content-Type", ""):
-                    raise ValueError(f"non-image response ({resp.headers.get('Content-Type')})")
-                from io import BytesIO
-
-                mosaic.paste(Image.open(BytesIO(resp.content)).convert("RGB"), (256 * ix, 256 * iy))
-                ok += 1
-            except Exception as exc:  # noqa: BLE001 - one missing tile is not fatal
-                failed += 1
-                log.debug("tile %s failed: %s", url, exc)
-
-    if ok == 0:
-        raise RuntimeError(
-            f"every imagery tile failed at zoom {zoom} ({failed} tiles) — refusing to "
-            "return a black mosaic that would look like valid imagery"
-        )
-    if failed > ok:
-        log.warning("imagery mosaic is mostly empty: %d ok, %d failed at zoom %d", ok, failed, zoom)
-
-    def _tile_to_lon(x):
-        return x / 2.0**zoom * 360.0 - 180.0
-
-    def _tile_to_lat(y):
-        n = math.pi - 2.0 * math.pi * y / 2.0**zoom
-        return math.degrees(math.atan(math.sinh(n)))
-
-    extent = (
-        _tile_to_lon(x0),
-        _tile_to_lon(x1 + 1),
-        _tile_to_lat(y1 + 1),
-        _tile_to_lat(y0),
-    )
-    return np.asarray(mosaic), extent
-
-
-def plot_connector_review(
-    net: Network,
-    route: Route | None = None,
-    path: Path = CONNECTOR_REVIEW_PATH,
-    *,
-    pad_m: float = 120.0,
-    dpi: int = 130,
-):
-    """One panel per bushwhack connector, drawn over USGS aerial imagery.
-
-    The point is to check the connectors against reality: does each one cross ground a
-    person could actually walk, and does it avoid water? The cost surface says yes, but a
-    cost surface built from a bare-earth DEM knows nothing about rhododendron thickets,
-    cliffs below its vertical resolution, or private property.
-    """
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    edges = net.edges
-    if route is not None and route.arcs:
-        used = {a.edge_id for a in route.arcs if a.off_trail}
-        connectors = edges[edges["edge_id"].isin(used)]
-        title_kind = "connectors used by the optimal route"
-    else:
-        connectors = edges[edges["off_trail"]]
-        title_kind = "all candidate connectors"
-
-    connectors = connectors[connectors["length_m"] > 20].copy()
-    if connectors.empty:
-        log.info("no connectors long enough to review")
-        return None
-
-    connectors = connectors.sort_values("length_m", ascending=False)
-    n = len(connectors)
-    cols = min(3, n)
-    rows = (n + cols - 1) // cols
-    fig, axes = plt.subplots(rows, cols, figsize=(5.4 * cols, 5.2 * rows), squeeze=False)
-
-    trails_wgs = edges[~edges["off_trail"]].to_crs(CRS_GEOGRAPHIC)
-
-    for ax, row in zip(axes.ravel(), connectors.itertuples(index=False)):
-        buffered = gpd.GeoSeries([row.geometry], crs=edges.crs).buffer(pad_m)
-        bounds = gpd.GeoSeries(buffered, crs=edges.crs).to_crs(CRS_GEOGRAPHIC).total_bounds
-        try:
-            img, extent = _fetch_imagery(tuple(bounds))
-            ax.imshow(img, extent=extent, origin="upper")
-        except Exception as exc:  # noqa: BLE001
-            log.warning("imagery fetch failed for %s: %s", row.name, exc)
-
-        clip = trails_wgs.cx[bounds[0] : bounds[2], bounds[1] : bounds[3]]
-        if len(clip):
-            clip.plot(ax=ax, color="#00e5ff", linewidth=2.0, alpha=0.9)
-
-        line = gpd.GeoSeries([row.geometry], crs=edges.crs).to_crs(CRS_GEOGRAPHIC)
-        line.plot(ax=ax, color="#ff2d2d", linewidth=3.0, linestyle="--")
-
-        ax.set_xlim(bounds[0], bounds[2])
-        ax.set_ylim(bounds[1], bounds[3])
-        ax.set_title(
-            f"{row.name}\n{row.length_m:.0f} m  |  {row.time_fwd_s / 60:.1f} min out, "
-            f"{row.time_rev_s / 60:.1f} min back",
-            fontsize=9,
-        )
-        ax.set_xticks([])
-        ax.set_yticks([])
-
-    for ax in axes.ravel()[n:]:
-        ax.set_axis_off()
-
-    fig.suptitle(
-        f"Bushwhack review — {title_kind}\n"
-        "red dashed = off-trail connector,  cyan = mapped trail,  imagery © USGS",
-        fontsize=12,
-    )
-    fig.tight_layout()
-    fig.savefig(path, dpi=dpi, bbox_inches="tight")
-    plt.close(fig)
-    log.info("wrote %s (%d connectors)", path.name, n)
-    return path
-
-
 def export_all(net: Network, route: Route | None = None) -> dict[str, Path]:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     def _write_cues():
@@ -723,7 +551,6 @@ def export_all(net: Network, route: Route | None = None) -> dict[str, Path]:
         steps += [("gpx", lambda: write_gpx(route)), ("cues", _write_cues)]
     steps += [
         ("interactive_map", lambda: write_interactive_map(net, route)),
-        ("connector_review", lambda: plot_connector_review(net, route)),
     ]
 
     # Each artifact is written independently. A locked output file or an unreachable

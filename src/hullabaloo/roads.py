@@ -264,7 +264,11 @@ def roads_near_network(
             segment = substring(line, lo, hi)
             if segment.geom_type != "LineString" or segment.length < 20:
                 continue
-            records.append({**{k: row[k] for k in ("name",) if k in row}, "geometry": segment})
+            # osm_id travels with the geometry: "Forest road" is a fallback label this
+            # module invents for unnamed tracks and currently covers twelve distinct ways,
+            # so the name alone cannot identify which road a segment came from.
+            kept = {k: row[k] for k in ("name", "osm_id") if k in row}
+            records.append({**kept, "geometry": segment})
 
     out = gpd.GeoDataFrame(records, geometry="geometry", crs=CRS_PROJECTED)
     if len(out):

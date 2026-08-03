@@ -15,7 +15,6 @@ import pytest
 
 from hullabaloo.config import (
     CONFIG,
-    CONNECTORS,
     EDGES,
     EDGES_TIMED,
     M_PER_MILE,
@@ -329,84 +328,6 @@ def test_only_scored_trails_earn_points():
     assert scored["score_mi"].sum() == pytest.approx(EXPECTED_MILES, abs=0.1)
 
 
-def test_connectors_avoid_water_and_developed_land():
-    """Regression: the cost surface is built from a *bare-earth* DEM, which sees only
-    gentle slope where houses, driveways and lawns are.
-
-    Before the land-cover mask, the optimal route's longest bushwhack ran 848 m straight
-    through a residential neighbourhood. Slope and water checks alone would not have
-    caught it — it took looking at aerial imagery.
-    """
-    from hullabaloo.bushwhack import DEVELOPED_CLASSES, fetch_landcover, fetch_waterbodies
-
-    connectors = _load(CONNECTORS)
-    edges = _load(EDGES_TIMED)
-    bounds = tuple(edges.to_crs("EPSG:4326").total_bounds)
-
-    try:
-        water = fetch_waterbodies(bounds)
-        classes, cls_bounds = fetch_landcover(bounds, width=900, height=900)
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip(f"external land-cover/hydrography services unavailable: {exc}")
-
-    if len(water):
-        assert not len(gpd.sjoin(connectors, water, predicate="intersects", how="inner"))
-
-    # Sample each connector's vertices against the land-cover grid.
-    minx, miny, maxx, maxy = cls_bounds
-    h, w = classes.shape
-    developed_hits = []
-    for row in connectors.to_crs("EPSG:4326").itertuples(index=False):
-        xs = np.array([c[0] for c in row.geometry.coords])
-        ys = np.array([c[1] for c in row.geometry.coords])
-        px = np.clip(((xs - minx) / (maxx - minx) * w).astype(int), 0, w - 1)
-        py = np.clip(((maxy - ys) / (maxy - miny) * h).astype(int), 0, h - 1)
-        sampled = classes[py, px]
-        # The depot access legitimately starts in the trailhead parking lot.
-        if row.name == "depot access":
-            continue
-        fraction = float(np.isin(sampled, DEVELOPED_CLASSES).mean())
-        if fraction > 0.25:
-            developed_hits.append((row.name, round(fraction, 2)))
-
-    assert not developed_hits, f"connectors crossing developed land: {developed_hits}"
-
-
-def test_no_connector_cuts_a_switchback():
-    """No off-trail connector may join two points on the same trail.
-
-    Cutting the inside of a switchback is how erosion scars start: the trail climbs a
-    hillside in traverses precisely so that boots do not run straight down the fall line.
-    A model that offers the shortcut is proposing a route nobody should walk, and it gains
-    nothing anyway — a trail's miles only score when the trail itself is walked.
-    """
-    connectors = _load(CONNECTORS)
-    edges = _load(EDGES)
-
-    on_trail: dict[int, set[int]] = {}
-    for row in edges.itertuples(index=False):
-        if row.trail_id != row.trail_id:  # NaN
-            continue
-        for node in (int(row.u), int(row.v)):
-            on_trail.setdefault(node, set()).add(int(row.trail_id))
-
-    offenders = [
-        (int(r.u), int(r.v), sorted(on_trail.get(int(r.u), set()) & on_trail.get(int(r.v), set())))
-        for r in connectors.itertuples(index=False)
-        if on_trail.get(int(r.u), set()) & on_trail.get(int(r.v), set())
-    ]
-    assert not offenders, f"connectors cutting their own trail: {offenders}"
-
-
-def test_connectors_are_slower_than_trail_for_the_same_ground():
-    connectors = _load(CONNECTORS)
-    edges = _load(EDGES_TIMED)
-    off_speed = (connectors["length_m"] / connectors["time_fwd_s"]).mean()
-    on = edges[~edges["off_trail"]]
-    on_speed = (on["length_m"] / on["time_fwd_s"]).mean()
-    assert off_speed < on_speed * 0.75
-
-
 # --------------------------------------------------------------------------------------
 # Graph / routing
 # --------------------------------------------------------------------------------------
@@ -500,67 +421,6 @@ def test_seven_hours_is_a_binding_constraint(net):
 
     bound = network_traversal_bound(net)
     assert bound["cover_all_lower_bound_h"] > CONFIG.race.time_budget_s / 3600
-
-
-# --------------------------------------------------------------------------------------
-# Pace re-pricing
-# --------------------------------------------------------------------------------------
-
-
-@pytest.fixture(scope="module")
-def coarse_dem():
-    """The coarsened surface the connectors were routed over, plus its transform."""
-    from hullabaloo.bushwhack import elevation_surface
-    from hullabaloo.elevation import load_dem
-
-    try:
-        array, transform, _, _ = load_dem()
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip(f"DEM not available: {exc}")
-    return elevation_surface(array, transform)
-
-
-def test_reprice_reproduces_the_stored_connector_times(coarse_dem):
-    """The pace sweep re-times connectors instead of re-routing them, which is only sound
-    if re-timing at the stored pace returns the stored numbers exactly.
-
-    This is the sweep's one silent failure mode. ``build_network`` reads connector times
-    straight off the connector frame, so a re-pricing bug leaves bushwhacks at one pace
-    while every trail moves to another — a mixed-pace model that still solves cleanly and
-    produces a plausible-looking route at a pace that exists nowhere.
-    """
-    from hullabaloo.bushwhack import reprice
-
-    connectors = _load(CONNECTORS)
-    elevation, transform = coarse_dem
-    again = reprice(connectors, elevation, transform, CONFIG.tobler)
-
-    for column in ("time_fwd_s", "time_rev_s"):
-        assert np.allclose(again[column], connectors[column], atol=1e-9), column
-
-
-def test_pace_factor_scales_travel_time_inversely(coarse_dem):
-    """Halving the pace must exactly double the time — the property that lets the sweep
-    re-price rather than re-route, since relative costs are then unchanged."""
-    import dataclasses
-
-    from hullabaloo.bushwhack import reprice
-
-    connectors = _load(CONNECTORS)
-    elevation, transform = coarse_dem
-    slow = reprice(
-        connectors,
-        elevation,
-        transform,
-        dataclasses.replace(CONFIG.tobler, pace_factor=CONFIG.tobler.pace_factor / 2),
-    )
-    ratio = slow["time_fwd_s"].to_numpy() / connectors["time_fwd_s"].to_numpy()
-    assert np.allclose(ratio, 2.0, rtol=1e-9)
-
-
-# --------------------------------------------------------------------------------------
-# Web export
-# --------------------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="module")

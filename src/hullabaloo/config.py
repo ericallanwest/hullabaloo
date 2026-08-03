@@ -40,7 +40,6 @@ TRAIL_TABLE = INTERIM / "trail_table.csv"
 EDGES = PROCESSED / "network_edges.parquet"
 NODES = PROCESSED / "network_nodes.parquet"
 EDGES_TIMED = PROCESSED / "network_edges_timed.parquet"
-CONNECTORS = PROCESSED / "connectors.parquet"
 GRAPH_EDGES = PROCESSED / "graph_edges.parquet"
 GRAPH_NODES = PROCESSED / "graph_nodes.parquet"
 
@@ -146,40 +145,6 @@ class ElevationParams:
 
 
 @dataclass(frozen=True)
-class BushwhackParams:
-    #: Maximum straight-line distance between two nodes to be considered as a candidate
-    #: off-trail connector, metres.
-    max_connector_dist_m: float = 900.0
-    #: Within a component, only keep a connector if the on-network route is at least this
-    #: many times slower than the bushwhack.
-    min_detour_ratio: float = 2.5
-    #: Hard cap on the number of connectors admitted to the graph.
-    max_connectors: int = 80
-    #: Slopes steeper than this (rise/run) are treated as impassable off-trail.
-    max_offtrail_slope: float = 1.0
-    #: Treat built-up NLCD classes as impassable off-trail.
-    #:
-    #: Not optional in practice. Without it the optimizer routed its longest bushwhack
-    #: 848 m straight through a residential neighbourhood, because a bare-earth DEM sees
-    #: only gentle slope where the houses are.
-    avoid_developed: bool = True
-    #: Which NLCD classes count as built-up.
-    #:
-    #: 22/23/24 are low/medium/high-intensity development — houses, driveways, parking,
-    #: commercial. Those are genuinely off-limits.
-    #:
-    #: 21 ("Developed, Open Space", <20% impervious) is deliberately **excluded** by
-    #: default. In a forested study area it is dominated by road right-of-ways and their
-    #: verges, and blocking it forbids ever crossing a road — which cost 18 of the 44
-    #: cross-component connectors and ~3 points, for no legitimate reason. Add 21 here if
-    #: you want to keep clear of large-lot residential lawns as well.
-    developed_classes: tuple[int, ...] = (22, 23, 24)
-    #: Downsample factor for the cost surface. 1 m cells over the full bbox is a very
-    #: large grid; 3 m is ample for connector routing and ~9x cheaper.
-    cost_surface_res_m: float = 3.0
-
-
-@dataclass(frozen=True)
 class RaceParams:
     #: Total time budget, seconds. 7 hours.
     time_budget_s: float = 7 * 3600
@@ -196,7 +161,6 @@ class Config:
     tobler: ToblerParams = field(default_factory=ToblerParams)
     topology: TopologyParams = field(default_factory=TopologyParams)
     elevation: ElevationParams = field(default_factory=ElevationParams)
-    bushwhack: BushwhackParams = field(default_factory=BushwhackParams)
     race: RaceParams = field(default_factory=RaceParams)
 
     def with_tobler(self, **kw) -> "Config":

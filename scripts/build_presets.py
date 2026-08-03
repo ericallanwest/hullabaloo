@@ -1,6 +1,6 @@
 """Solve the race once per pace factor and publish the results to ``docs/data/``.
 
-    pixi run presets                 # all six pace factors
+    pixi run presets                 # every pace factor
     pixi run presets --paces 1.3     # just one, while iterating on the front end
 
 The site is static: the browser picks a pre-solved itinerary, it never solves anything.
@@ -11,8 +11,8 @@ Tobler's constants describe unhurried walking. A fit competitor is meaningfully 
 but *how much* quicker is the one parameter a racer can neither measure in advance nor
 control on the day. Sweeping it shows how much the plan depends on being right about it.
 
-The expensive inputs — the DEM, the network topology, the least-cost connector paths —
-are all pace-independent, so they are computed once and reused across every pace.
+The expensive inputs — the DEM and the network topology — are pace-independent, so they
+are computed once and reused across every pace.
 """
 
 from __future__ import annotations
@@ -27,52 +27,45 @@ from pathlib import Path
 import geopandas as gpd
 import numpy as np
 
-from hullabaloo import bushwhack, elevation as elev, webexport
-from hullabaloo.config import CONFIG, CONNECTORS, EDGES, EDGES_TIMED, NODES, OUTPUTS
+from hullabaloo import elevation as elev, webexport
+from hullabaloo.config import CONFIG, EDGES, EDGES_TIMED, NODES, OUTPUTS
 from hullabaloo.graph import build_network
 from hullabaloo.optimize_alns import ALNS, build_trail_chains
 from hullabaloo.optimize_milp import solve as milp_solve
 
 log = logging.getLogger("hullabaloo.presets")
 
-#: The radio buttons in ``docs/index.html``. 1.0 is textbook Tobler; 1.5 is a fast racer.
-PACE_FACTORS = (1.0, 1.1, 1.2, 1.3, 1.4, 1.5)
+#: The radio buttons in ``docs/index.html``. 1.0 is textbook Tobler; 2.0 is elite.
+PACE_FACTORS = (1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0)
 
 
-def _reprice_check(edges_raw, edge_profiles, conn_raw, elevation, transform) -> None:
-    """Confirm re-pricing at the stored pace reproduces the stored files exactly.
+def _reprice_check(edges_raw, edge_profiles) -> None:
+    """Confirm re-pricing at the stored pace reproduces the committed edge table exactly.
 
-    This guards the one failure mode of the whole sweep that produces no error and no
-    visibly wrong output. ``build_network`` reads connector times straight off the
-    connector frame, so forgetting to re-price them leaves every bushwhack frozen at the
-    pace that built the file while the trails scale around it. The result is a
-    self-consistent-looking model at a pace that exists nowhere, and it solves cleanly.
+    The sweep re-prices every edge from cached DEM profiles rather than re-running the
+    elevation stage eleven times. If that re-pricing ever drifts, the sweep is quietly
+    solving a different network from the one the repository ships, with nothing to show
+    for it — so it is checked against the stored file before any solving starts.
     """
     timed = elev.price_edges(edges_raw, edge_profiles, CONFIG.tobler)
-    conn = bushwhack.reprice(conn_raw, elevation, transform, CONFIG.tobler)
-
-    stored_edges = gpd.read_parquet(EDGES_TIMED)
-    for frame, stored, label in ((timed, stored_edges, "edges"), (conn, conn_raw, "connectors")):
-        for column in ("time_fwd_s", "time_rev_s"):
-            drift = np.abs(
-                frame[column].to_numpy(dtype=float) - stored[column].to_numpy(dtype=float)
-            ).max()
-            if drift > 1e-6:
-                raise SystemExit(
-                    f"re-pricing {label}.{column} at the stored pace drifted by {drift:.6g}s — "
-                    "the sweep would be solving a different model than the committed run"
-                )
-    log.info("re-pricing reproduces the stored edge and connector times exactly")
+    stored = gpd.read_parquet(EDGES_TIMED)
+    for column in ("time_fwd_s", "time_rev_s"):
+        drift = np.abs(
+            timed[column].to_numpy(dtype=float) - stored[column].to_numpy(dtype=float)
+        ).max()
+        if drift > 1e-6:
+            raise SystemExit(
+                f"re-pricing {column} at the stored pace drifted by {drift:.6g}s — the "
+                "sweep would be solving a different model than the committed run"
+            )
+    log.info("re-pricing reproduces the stored edge times exactly")
 
 
 def solve_at_pace(
     pace: float,
     edges_raw,
     edge_profiles,
-    conn_raw,
     nodes,
-    elevation,
-    transform,
     *,
     alns_iterations: int,
     alns_seeds: int,
@@ -81,8 +74,7 @@ def solve_at_pace(
     """Re-price the network at ``pace`` and return ``(net, route, solver_metadata)``."""
     tobler = dataclasses.replace(CONFIG.tobler, pace_factor=pace)
     timed = elev.price_edges(edges_raw, edge_profiles, tobler)
-    conn = bushwhack.reprice(conn_raw, elevation, transform, tobler)
-    net = build_network(timed, nodes, conn)
+    net = build_network(timed, nodes)
 
     best = None
     for seed in range(alns_seeds):
@@ -131,18 +123,14 @@ def main() -> None:
     started = time.time()
 
     edges_raw = gpd.read_parquet(EDGES)
-    conn_raw = gpd.read_parquet(CONNECTORS)
     nodes = gpd.read_parquet(NODES)
     array, transform, _, _ = elev.load_dem()
 
     log.info("sampling elevation profiles once for all %d paces", len(args.paces))
     edge_profiles = elev.edge_profiles(edges_raw, array, transform)
-    # Connectors are re-timed along the coarsened surface they were routed over, not the
-    # raw 1 m DEM, so the numbers match the ones the connectors were selected with.
-    elevation, conn_transform = bushwhack.elevation_surface(array, transform)
 
     if not args.skip_check:
-        _reprice_check(edges_raw, edge_profiles, conn_raw, elevation, conn_transform)
+        _reprice_check(edges_raw, edge_profiles)
 
     rows = []
     for pace in args.paces:
@@ -153,10 +141,7 @@ def main() -> None:
             pace,
             edges_raw,
             edge_profiles,
-            conn_raw,
             nodes,
-            elevation,
-            conn_transform,
             alns_iterations=args.alns_iterations,
             alns_seeds=args.alns_seeds,
             milp_seconds=args.milp_seconds,

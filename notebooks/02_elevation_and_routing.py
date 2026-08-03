@@ -16,13 +16,12 @@ def _():
     import numpy as np
     import pandas as pd
 
-    from hullabaloo.config import CONFIG, CONNECTORS, EDGES, EDGES_TIMED, NODES, TRAILS_RAW
+    from hullabaloo.config import CONFIG, EDGES, EDGES_TIMED, NODES, TRAILS_RAW
     from hullabaloo import elevation as elev
     from hullabaloo.tobler import flat_pace_summary
 
     return (
         CONFIG,
-        CONNECTORS,
         EDGES,
         EDGES_TIMED,
         NODES,
@@ -190,81 +189,67 @@ def _(CONFIG, flat_pace_summary, mo, pd):
 def _(mo):
     mo.md(
         r"""
-        ## Bushwhack connectors
+        ## The bushwhacking that turned out to be unnecessary
 
-        The network is in three pieces, so off-trail travel is mandatory. Connectors are
-        least-cost paths over a Tobler-derived cost surface run at 60% speed.
+        This project spent most of its life assuming off-trail travel was mandatory. The
+        40 scored trails sit in three disconnected pieces, so *something* had to bridge
+        them, and the answer looked like least-cost bushwhack connectors: paths routed
+        over a Tobler-derived cost surface and walked at 60% speed.
 
-        Three things to be explicit about:
+        That machinery is gone now, and the story of why is more interesting than the
+        code was.
 
-        * **Water is masked.** Pandapas Pond sits in the middle of the study area. NHD
-          hydrography contributes 4.7 ha of impassable cells. An earlier flatness-based
-          heuristic flagged **20% of the map** as water, so the code now rejects any
-          fallback mask that claims more than 2% of the area rather than quietly warping
-          every connector.
-        * **Developed land is masked too** — and that one took aerial imagery to find.
-        * **`MCP_Geometric` is isotropic.** It prices cells by slope *magnitude*, so path
-          *selection* treats up and down alike. We compensate by re-integrating true
-          directional Tobler time along the returned polyline, which restores asymmetry
-          in the routing graph. `MCP_Flexible` is the fully anisotropic upgrade.
+        ### First: forest roads span the gaps
+
+        The gaps between components are crossed by **forest service roads** — legal,
+        full-speed, unambiguous. Once they were imported the network became a single
+        component and bushwhacking stopped being mandatory. It remained *attractive*,
+        though: the optimizer still took a 0.58 mi shortcut in 8 of 11 published routes.
+
+        ### Then: the shortcuts were an artefact of our own clipping
+
+        Chasing that last shortcut found the real cause. Roads were imported from
+        OpenStreetMap `highway=track` only, which misses a paved `highway=tertiary`
+        (Meadowbrook Drive), a gravel `highway=path` (Stone Cutter's Hollow Access Road),
+        and a `highway=service` forest road (Road 708). Worse, roads were clipped to
+        250 m of the trails and whatever survived was kept — which sliced Meadowbrook
+        into three disconnected pieces, because its middle runs further than that from
+        any trail.
+
+        So the optimizer was bushwhacking across a gap **we had created**, retracing the
+        road's own alignment off-trail. The tell was that the on-network alternative
+        between those two nodes cost 7330 s, detouring via Beauty and Gateway. A two-hour
+        detour to cross 600 m of road is not a routing decision, it is a broken graph.
+
+        With the missing roads imported and the clip fixed to trim ends without severing
+        through-routes, candidate connectors fell from **128 to 4**, and re-solving at
+        pace 1.0, 1.5 and 2.0 used **none of them**. The stage was removed.
 
         ### The bug no automated check could catch
+
+        Worth keeping, because it is the best thing this dead end produced.
 
         Every check passed. Connectors avoided water, respected slope limits, ran at a
         plausible 0.56x on-trail speed. Then drawing them on USGS aerial imagery showed
         the optimal route's longest bushwhack running **848 m through a residential
         neighbourhood** — houses, driveways, lawns, a swimming pool.
 
-        The cause is structural rather than a coding error. The cost surface comes from a
+        The cause was structural rather than a coding error. The cost surface came from a
         **bare-earth** DEM: terrain with buildings and vegetation stripped out by
-        definition. Where the houses are, it sees gentle, inviting slope. No amount of
+        definition. Where the houses are, it saw gentle, inviting slope. No amount of
         slope or hydrography validation finds this, because the input does not contain
-        the information.
+        the information. The fix was NLCD land cover with developed classes masked, and
+        the illegal shortcut turned out to be worth **0.057 points** — nearly nothing, and
+        simply invisible to every check that did not involve looking at a photograph.
 
-        The fix is NLCD land cover with developed classes (21-24) impassable — 5.4% of the
-        study area. The route loses **0.057 points**. The illegal shortcut was worth almost
-        nothing; it was simply invisible to every check that did not involve looking at a
-        photograph.
+        Two smaller lessons from the same stage, both preserved in the road importer:
+        Pandapas Pond had to be masked from NHD hydrography (an earlier flatness-based
+        heuristic flagged **20% of the map** as water), and connectors joining two points
+        on the *same* trail had to be rejected outright as switchback cuts — 167 of them —
+        because a model that offers to run the fall line is proposing erosion.
         """
     )
     return
-
-
-@app.cell
-def _(CONNECTORS, EDGES_TIMED, gpd, mo, pd, timed):
-    connectors = gpd.read_parquet(CONNECTORS)
-    _on = timed[~timed["off_trail"]]
-    _speeds = pd.DataFrame(
-        [
-            {
-                "surface": "on trail",
-                "mean m/s": round(float((_on["length_m"] / _on["time_fwd_s"]).mean()), 3),
-            },
-            {
-                "surface": "off trail",
-                "mean m/s": round(
-                    float((connectors["length_m"] / connectors["time_fwd_s"]).mean()), 3
-                ),
-            },
-        ]
-    )
-    mo.vstack(
-        [
-            mo.ui.table(_speeds, selection=None),
-            mo.md(
-                "The realised ratio is 0.56 rather than the nominal 0.60 because "
-                "connectors cut across slopes that graded trail contours around — a "
-                "sanity check that the cost surface is doing real work."
-            ),
-            mo.ui.table(
-                connectors[["name", "kind", "length_m", "straight_m", "sinuosity", "time_fwd_s", "time_rev_s"]]
-                .sort_values("time_fwd_s")
-                .head(20),
-                selection=None,
-            ),
-        ]
-    )
-    return (connectors,)
 
 
 @app.cell

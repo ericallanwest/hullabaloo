@@ -12,7 +12,7 @@ Scoring, as confirmed with the organizer's rules:
 
     score = min(trails_fully_completed, 40) + min(unique_trail_miles, 40)
 
-Repeated traversal earns nothing extra, and off-trail connectors earn nothing at all —
+Repeated traversal earns nothing extra, and forest roads earn nothing at all —
 they only cost time. That combination is what makes this a prize-collecting arc routing
 problem rather than a shortest-path or a plain TSP.
 """
@@ -29,7 +29,6 @@ import pandas as pd
 
 from .config import (
     CONFIG,
-    CONNECTORS,
     EDGES_TIMED,
     GRAPH_EDGES,
     NODES,
@@ -84,41 +83,17 @@ class Network:
 def build_network(
     edges: gpd.GeoDataFrame | None = None,
     nodes: gpd.GeoDataFrame | None = None,
-    connectors: gpd.GeoDataFrame | None = None,
 ) -> Network:
-    """Combine trail edges and off-trail connectors into one directed graph."""
+    """Turn the edge and node tables into the directed, time-weighted routing graph.
+
+    Every edge here is legal walkable ground: scored trail, forest road, or the short
+    off-trail link from the start line to the network. The graph once also carried
+    least-cost bushwhack connectors; importing the roads that were actually missing made
+    every one of them unattractive, so the stage that generated them is gone.
+    """
     edges = gpd.read_parquet(EDGES_TIMED) if edges is None else edges
     nodes = gpd.read_parquet(NODES) if nodes is None else nodes
-    if connectors is None and CONNECTORS.exists():
-        connectors = gpd.read_parquet(CONNECTORS)
-
-    frames = [edges]
-    if connectors is not None and len(connectors):
-        conn = connectors.copy()
-        conn["edge_id"] = range(
-            int(edges["edge_id"].max()) + 1, int(edges["edge_id"].max()) + 1 + len(conn)
-        )
-        conn["seq"] = 0
-        keep = [
-            "edge_id",
-            "trail_id",
-            "name",
-            "seq",
-            "length_m",
-            "off_trail",
-            "u",
-            "v",
-            "time_fwd_s",
-            "time_rev_s",
-            "gain_fwd_m",
-            "gain_rev_m",
-            "score_mi",
-            "geometry",
-        ]
-        frames.append(conn.reindex(columns=keep))
-
-    combined = pd.concat(frames, ignore_index=True)
-    combined = gpd.GeoDataFrame(combined, geometry="geometry", crs=edges.crs)
+    combined = gpd.GeoDataFrame(edges.copy(), geometry="geometry", crs=edges.crs)
 
     depot_rows = nodes.loc[nodes.get("is_depot", pd.Series(False, index=nodes.index))]
     if depot_rows.empty:
@@ -288,7 +263,7 @@ def network_traversal_bound(net: Network) -> dict:
     """
     by_edge: dict[int, float] = {}
     for arc in net.arcs:
-        if arc.trail_id is None:  # roads and bushwhacks are not required coverage
+        if arc.trail_id is None:  # roads are not required coverage
             continue
         by_edge[arc.edge_id] = min(by_edge.get(arc.edge_id, np.inf), arc.time_s)
 

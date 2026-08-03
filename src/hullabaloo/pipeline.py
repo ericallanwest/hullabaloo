@@ -14,7 +14,7 @@ import logging
 import time
 from dataclasses import asdict
 
-from .config import CONFIG, CONNECTORS, EDGES, EDGES_TIMED, NODES, OUTPUTS, TRAILS_RAW
+from .config import CONFIG, EDGES, EDGES_TIMED, NODES, OUTPUTS, TRAILS_RAW
 
 log = logging.getLogger("hullabaloo.pipeline")
 
@@ -33,14 +33,13 @@ def run(
     force_ingest: bool = False,
     force_topology: bool = False,
     force_elevation: bool = False,
-    force_bushwhack: bool = False,
 ) -> dict:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     started = time.time()
     # asdict recurses into the nested parameter dataclasses already.
     report: dict = {"config": asdict(CONFIG)}
 
-    from . import bushwhack, elevation, export, ingest, topology
+    from . import elevation, export, ingest, topology
     from .graph import build_network, network_traversal_bound
     from .optimize_alns import ALNS, baseline_best_ratio, baseline_greedy, build_trail_chains
 
@@ -56,17 +55,13 @@ def run(
         _stage("3 - elevation and Tobler pricing")
         elevation.run()
 
-    if force_bushwhack or not CONNECTORS.exists():
-        _stage("4 - bushwhack connectors")
-        bushwhack.run()
-
-    _stage("5 - routing graph")
+    _stage("4 - routing graph")
     net = build_network()
     bound = network_traversal_bound(net)
     report["coverage_bound"] = bound
     log.info("coverage reference: %s", bound)
 
-    _stage("6 - optimization")
+    _stage("5 - optimization")
     chains = build_trail_chains(net)
     greedy = baseline_greedy(net, chains)
     ratio = baseline_best_ratio(net, chains)
@@ -94,7 +89,7 @@ def run(
         raise RuntimeError(f"optimizer returned an invalid route: {problems}")
 
     if milp_seconds > 0:
-        _stage("6b - MILP upper bound")
+        _stage("5b - MILP upper bound")
         from .optimize_milp import check_caps_nonbinding, solve as milp_solve
 
         caps = check_caps_nonbinding(net)
@@ -146,7 +141,7 @@ def run(
     _save_report()
     log.info("saved results to %s", OUTPUTS / "run_report.json")
 
-    _stage("7 - exports")
+    _stage("6 - exports")
     try:
         written = export.export_all(net, route)
         report["outputs"] = {k: str(v) for k, v in written.items()}
@@ -167,7 +162,7 @@ def main() -> None:
         default=0,
         help="Seconds to spend proving an upper bound (0 = skip the MILP entirely).",
     )
-    for stage in ("ingest", "topology", "elevation", "bushwhack"):
+    for stage in ("ingest", "topology", "elevation"):
         parser.add_argument(f"--force-{stage}", action="store_true")
     args = parser.parse_args()
 
@@ -178,7 +173,6 @@ def main() -> None:
         force_ingest=args.force_ingest,
         force_topology=args.force_topology,
         force_elevation=args.force_elevation,
-        force_bushwhack=args.force_bushwhack,
     )
 
 

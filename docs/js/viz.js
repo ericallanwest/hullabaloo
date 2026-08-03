@@ -44,8 +44,6 @@ const GOLD = '#FFD700';
 const NET_THEMES = { light: '#999999', dark: '#6b6b78' };
 let netColor = NET_THEMES.light;
 
-const CAND_STYLE = { color: '#f08080', weight: 3, opacity: 0.55, dashArray: '4,6' };
-
 // ── Utilities ──────────────────────────────────────────────────────────────
 // Round to whole minutes *first*, then split. Taking the hour before rounding the
 // remainder lets 6 h 59.94 m render as "6h 60m" — which the 6:59:56 optimal route does hit.
@@ -115,7 +113,6 @@ let startMarker = null;
 let homeBounds = null;
 
 const netGroup    = L.layerGroup();   // full trail network, gray backdrop
-const candGroup   = L.layerGroup();   // bushwhack connectors the route did not use
 const walkedGroup = L.layerGroup();   // steps already taken
 const arrowGroup  = L.layerGroup();   // direction-of-travel arrowheads
 const currentGroup = L.layerGroup();  // the step under the slider
@@ -124,7 +121,7 @@ const currentGroup = L.layerGroup();  // the step under the slider
 function stepStyle(step) {
   if (step.cat === 'repeat') return { color: CAT_COLOR.repeat, weight: 5, opacity: 0.9, dashArray: '6,5' };
   if (step.cat === 'offtrail')
-    // Bushwhacks are dashed because they are not a path on the ground; roads are solid
+    // The depot link is dashed because it is not a path on the ground; roads are solid
     // because they are, even though neither earns a point.
     return { color: CAT_COLOR.offtrail, weight: 5, opacity: 0.9, dashArray: step.bushwhack ? '2,6' : null };
   return { color: CAT_COLOR.unique, weight: 5, opacity: 1 };
@@ -138,7 +135,7 @@ function stepVisible(step) {
 
 function stepPopup(step) {
   const tag = CAT_LABEL[step.cat];
-  const kind = step.cat === 'offtrail' ? (step.bushwhack ? 'bushwhack' : 'road') : tag;
+  const kind = step.cat === 'offtrail' ? (step.bushwhack ? 'off-trail link' : 'road') : tag;
   return `<b>${esc(step.name)}</b>${kind ? ` <i>(${kind})</i>` : ''}<br>` +
     `node ${step.from_node} → ${step.to_node}<br>` +
     `${step.miles.toFixed(2)} mi &nbsp; ${fmtMS(step.seconds)}<br>` +
@@ -165,24 +162,16 @@ function addStepLine(group, step, options, arrowColor) {
 // ── Rendering ──────────────────────────────────────────────────────────────
 function drawNetwork() {
   netGroup.clearLayers();
-  candGroup.clearLayers();
   if (!NETWORK) return;
 
   // Edges the current route walks are drawn by the step layers on top; the backdrop is
   // deliberately the *whole* network, so the unwalked remainder stays visible as the
   // thing the seven-hour budget could not reach.
   for (const edge of NETWORK.edges) {
-    if (edge.kind === 'bushwhack') {
-      L.polyline(edge.geometry, { ...CAND_STYLE })
-        .bindTooltip(`${esc(edge.name)} — ${edge.miles.toFixed(2)} mi (not used)`,
-          { sticky: true, opacity: 0.85 })
-        .addTo(candGroup);
-    } else {
-      L.polyline(edge.geometry, { color: netColor, weight: 3, opacity: 0.75 })
-        .bindTooltip(`${esc(edge.name)} — ${edge.miles.toFixed(2)} mi`,
-          { sticky: true, opacity: 0.85 })
-        .addTo(netGroup);
-    }
+    L.polyline(edge.geometry, { color: netColor, weight: 3, opacity: 0.75 })
+      .bindTooltip(`${esc(edge.name)} — ${edge.miles.toFixed(2)} mi`,
+        { sticky: true, opacity: 0.85 })
+      .addTo(netGroup);
   }
 }
 
@@ -261,7 +250,7 @@ function buildItinerary() {
 
   $('itinerary').innerHTML = PRESET.steps.map(s => {
     const tag = s.cat === 'repeat' ? 'repeat'
-              : s.cat === 'offtrail' ? (s.bushwhack ? 'bushwhack' : 'road') : '';
+              : s.cat === 'offtrail' ? (s.bushwhack ? 'off-trail link' : 'road') : '';
     const done = completedAt.get(s.i);
     return `<div class="itin-step" data-step="${s.i}">
       <span class="itin-n" style="color:${CAT_COLOR[s.cat]}">${s.i}.</span>
@@ -472,7 +461,7 @@ document.addEventListener('DOMContentLoaded', () => {
     { attribution: 'Hillshade &copy; Esri', maxZoom: 16, opacity: 0.15, zIndex: 2 },
   ).addTo(map);
 
-  [netGroup, candGroup, walkedGroup, currentGroup, arrowGroup].forEach(g => g.addTo(map));
+  [netGroup, walkedGroup, currentGroup, arrowGroup].forEach(g => g.addTo(map));
 
   // ── Pane toggles ─────────────────────────────────────────────────────────
   $('left-toggle').addEventListener('click', () => {
@@ -521,10 +510,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ── Layer toggles ────────────────────────────────────────────────────────
   $('togRepeat').addEventListener('change', () => renderStep(currentStep));
-  $('togOff').addEventListener('change', function () {
-    if (this.checked) candGroup.addTo(map); else map.removeLayer(candGroup);
-    renderStep(currentStep);
-  });
+  $('togOff').addEventListener('change', () => renderStep(currentStep));
 
   // ── Opacity + basemap ────────────────────────────────────────────────────
   $('mapwarpOpacity').addEventListener('input', function () {

@@ -5,7 +5,7 @@ Run it:
     pixi run edit         # editable notebook
 
 Move the sliders and the route re-solves. The expensive artifacts (DEM, network topology,
-bushwhack connectors) are cached, so only the parts that actually depend on a changed
+forest roads) are cached, so only the parts that actually depend on a changed
 parameter recompute.
 """
 
@@ -163,7 +163,7 @@ def _(np, pd, tobler_params, tobler_speed_kmh):
                 {
                     "slope": _slopes,
                     "kmh": tobler_speed_kmh(_slopes, tobler_params) * tobler_params.off_trail_factor,
-                    "surface": "off trail (bushwhack)",
+                    "surface": "off trail",
                 }
             ),
         ]
@@ -178,7 +178,7 @@ def _(mo):
         ## The network
 
         Re-pricing every edge under the current Tobler parameters. The topology and the
-        bushwhack connectors do not depend on these sliders, so they are loaded from disk
+        forest roads do not depend on these sliders, so they are loaded from disk
         rather than rebuilt.
         """
     )
@@ -199,13 +199,12 @@ def _(EDGES, elev, gpd, mo):
 
 @app.cell
 def _(build_network, edges_raw, elev, gpd, profiles, tobler_params):
-    from hullabaloo.config import CONNECTORS, NODES as NODES_PATH
+    from hullabaloo.config import NODES as NODES_PATH
 
     timed_edges = elev.price_edges(edges_raw, profiles, tobler_params)
     nodes = gpd.read_parquet(NODES_PATH)
-    connectors = gpd.read_parquet(CONNECTORS) if CONNECTORS.exists() else None
-    net = build_network(timed_edges, nodes, connectors)
-    return connectors, net, nodes, timed_edges
+    net = build_network(timed_edges, nodes)
+    return net, nodes, timed_edges
 
 
 @app.cell
