@@ -150,7 +150,7 @@ def test_splitting_preserved_length():
 
 def test_every_trail_survived_and_is_contiguous():
     edges = _load(EDGES)
-    on_trail = edges[~edges["off_trail"]]
+    on_trail = edges[edges["trail_id"].notna()]
     assert on_trail["trail_id"].nunique() == EXPECTED_TRAILS
     for trail_id, grp in on_trail.groupby("trail_id"):
         used = np.unique(np.concatenate([grp["u"].values, grp["v"].values]))
@@ -189,7 +189,12 @@ def test_adding_the_depot_never_destroys_edges():
     assert len(nodes) == len(plain_nodes) + 2
     assert edges["edge_id"].is_unique
     assert nodes["node_id"].is_unique
-    assert edges.loc[edges["off_trail"], "name"].tolist() == ["depot access"]
+    access = edges[edges["name"] == "depot access"]
+    assert len(access) == 1
+    # Gravel or paved on the ground, so full speed: it scores nothing because it carries
+    # no trail_id, which is a separate question from how fast it is walked.
+    assert not access["off_trail"].any()
+    assert access["trail_id"].isna().all()
 
     on_trail_m = edges.loc[~edges["off_trail"], "length_m"].sum()
     assert on_trail_m == pytest.approx(plain_edges["length_m"].sum(), rel=1e-6)

@@ -408,8 +408,12 @@ def _add_depot(
             "name": "depot access",
             "seq": 0,
             "length_m": access.length,
-            "off_trail": True,  # priced at the off-trail speed factor
-            "is_road": False,
+            # Gravel or paved on the ground, so it is walked at full speed. It was
+            # modelled off-trail purely because it is not one of the 40 scored trails —
+            # but that is a question about *points*, not about pace, and the two are
+            # independent here: score_mi is what withholds the points.
+            "off_trail": False,
+            "is_road": True,
             "geometry": access,
             "u": depot_node,
             "v": anchor_node,

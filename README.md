@@ -250,9 +250,14 @@ water, so the code rejects any fallback claiming more than 2% rather than quietl
 routes swim.
 
 Together these took bushwhack candidates from **128 to 4**, and re-solving at pace 1.0,
-1.5 and 2.0 used **none of them**. The off-trail model was removed. The only off-trail
-edge left in the network is the 0.04 mile `depot access` link from the start line, which
-still carries the 60% penalty.
+1.5 and 2.0 used **none of them**. The off-trail model was removed.
+
+Nothing in the network is off-trail any more. The short `depot access` link from the start
+line was the last thing modelled that way, and it is gravel or paved on the ground, so it
+is walked at full speed too. It was only marked off-trail because it is not one of the 40
+scored trails — but that is a question about *points*, and points are already withheld by
+`score_mi`. Pace and scoring are independent, and conflating them cost the model a 40%
+speed penalty on ground that deserves none.
 
 ### The bug that only aerial imagery could catch
 
@@ -395,8 +400,8 @@ Working CRS is **EPSG:6346** (NAD83(2011) / UTM 17N, metres), matching the lidar
 - **Tobler is uncalibrated.** The constants are from the literature, not from anyone's
   actual pace over seven hours with a pack. Fitting `base`/`k` to real Strava times on
   these trails would be the single highest-value improvement.
-- **Every route is now on legal, walkable ground** — scored trail, forest road, or the
-  0.04 mi off-trail link from the start line. That is a result rather than an assumption:
+- **Every route is now on legal, walkable ground at full speed** — scored trail, forest
+  road, or the gravel access link from the start line. That is a result, not an assumption:
   the off-trail model was kept until re-solving showed no route wanted it. It also means
   the plan is only as good as the road data, and OSM tags are an imperfect guide to what
   can actually be walked.
