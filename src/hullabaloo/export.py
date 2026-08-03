@@ -406,38 +406,46 @@ def plot_route(net: Network, route: Route | None, path: Path = MAP_PATH, dpi: in
     from matplotlib.lines import Line2D
 
     def road_mask(frame):
+        """Which rows are road rather than scored trail.
+
+        ``net.edges`` carries ``is_road``; the per-arc route frame does not, and falling
+        back to ``off_trail`` there would silently mark nothing — every road would be drawn
+        as trail. A null ``trail_id`` is the durable test: it is what withholds the points
+        in the first place, and it is present in both frames.
+        """
         if "is_road" in frame:
             return frame["is_road"].fillna(False).astype(bool)
-        return frame["off_trail"].astype(bool)
+        return frame["trail_id"].isna()
+
+    def draw(frame, **style):
+        if len(frame):
+            frame.plot(ax=ax, **style)
+        return len(frame)
 
     fig, ax = plt.subplots(figsize=(11, 9))
     edges = net.edges
-    edges[~road_mask(edges)].plot(ax=ax, color="#c9ccd1", linewidth=1.1, zorder=1)
-    edges[road_mask(edges)].plot(
-        ax=ax, color="#e4d5c9", linewidth=1.1, linestyle=(0, (4, 2)), zorder=1
-    )
+    roads_unused = road_mask(edges)
+    draw(edges[~roads_unused], color="#c9ccd1", linewidth=1.1, zorder=1)
+    draw(edges[roads_unused], color="#d8c3b0", linewidth=1.1, linestyle=(0, (4, 2)), zorder=1)
 
     handles = [
         Line2D([], [], color="#c9ccd1", lw=2, label="trail network (unused)"),
-        Line2D([], [], color="#e4d5c9", lw=2, ls="--", label="road (unused)"),
+        Line2D([], [], color="#d8c3b0", lw=2, ls="--", label="road (unused)"),
     ]
 
     if route is not None and route.arcs:
         used = route_gdf(route)
         is_road = road_mask(used)
-        used[~is_road].plot(ax=ax, color="#1f77b4", linewidth=2.6, zorder=3)
-        handles.append(Line2D([], [], color="#1f77b4", lw=3, label="route on trail"))
-        roads = used[is_road]
-        if len(roads):
-            roads.plot(ax=ax, color="#c0392b", linewidth=2.4, zorder=4)
+        if draw(used[~is_road], color="#1f77b4", linewidth=2.6, zorder=3):
+            handles.append(Line2D([], [], color="#1f77b4", lw=3, label="route on trail"))
+        if draw(used[is_road], color="#c0392b", linewidth=2.4, zorder=4):
             handles.append(
                 Line2D([], [], color="#c0392b", lw=3, label="route on road — no points")
             )
         # Only drawn when one exists. Every published route is now on trail or road, but a
         # legend entry for a category with nothing in it invites the reader to go looking.
         bush = used[used["off_trail"].astype(bool)]
-        if len(bush):
-            bush.plot(ax=ax, color="#d62728", linewidth=2.2, linestyle="--", zorder=5)
+        if draw(bush, color="#d62728", linewidth=2.2, linestyle="--", zorder=5):
             handles.append(
                 Line2D([], [], color="#d62728", lw=3, ls="--", label="off-trail connector")
             )
