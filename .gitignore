@@ -24,6 +24,8 @@ outputs/connector_review.png
 
 # QGIS projects — they store absolute local paths, so they do not open for anyone else
 *.qgz
+# GDAL writes a sidecar next to any raster it opens, including the map PDF above.
+*.aux.xml
 
 # http cache written by py3dep / pynhd
 cache/
