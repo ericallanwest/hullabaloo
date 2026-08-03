@@ -43,8 +43,10 @@ const CAT_LABEL = { unique: '', offtrail: 'road', repeat: 'repeat' };
 const GOLD = '#FFD700';
 
 // Network grays flip with the UI theme: a mid gray that reads as "faint" on a light
-// basemap disappears entirely on a dark one.
-const NET_THEMES = { light: '#999999', dark: '#6b6b78' };
+// basemap disappears entirely on a dark one. Note the two move in *opposite* directions
+// when the goal is legibility — the light-theme gray gets darker, the dark-theme gray gets
+// lighter. Both are steps away from the background, which is the thing that matters.
+const NET_THEMES = { light: '#6e6e6e', dark: '#8a8a99' };
 let netColor = NET_THEMES.light;
 
 // ── Utilities ──────────────────────────────────────────────────────────────
