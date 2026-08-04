@@ -108,7 +108,7 @@
     "upper_bound": 48.225,
     "gap_pct": 0.0,
     "trails_completed": 26,
-    "solve_seconds": 59.8
+    "solve_seconds": 58.5
   },
   "alns_gap_vs_milp_bound_pct": 0.7,
   "milp_route_validation": "OK",
@@ -137,7 +137,7 @@
     "feasible": true,
     "n_arcs": 99
   },
-  "elapsed_s": 979.1,
+  "elapsed_s": 1104.8,
   "outputs": {
     "geopackage": "C:\\Users\\Eric\\Desktop\\Ideas\\Hullabaloo\\outputs\\hullabaloo.gpkg",
     "map": "C:\\Users\\Eric\\Desktop\\Ideas\\Hullabaloo\\outputs\\route_map.png",

@@ -1,5 +1,5 @@
 {
-  "elapsed_s": 10180.0,
+  "elapsed_s": 9157.7,
   "presets": [
     {
       "pace": 1.0,
@@ -23,7 +23,7 @@
       "walked_miles": 20.2,
       "offtrail_miles": 0.0,
       "repeat_miles": 2.13,
-      "time_h": 6.986,
+      "time_h": 6.99,
       "time_budget_h": 7.0,
       "feasible": true,
       "n_arcs": 82,
@@ -34,13 +34,13 @@
       "score": 43.704,
       "unique_miles": 19.704,
       "trails_completed": 24,
-      "walked_miles": 21.89,
+      "walked_miles": 21.9,
       "offtrail_miles": 0.0,
-      "repeat_miles": 2.19,
+      "repeat_miles": 2.2,
       "time_h": 7.0,
       "time_budget_h": 7.0,
       "feasible": true,
-      "n_arcs": 90,
+      "n_arcs": 89,
       "source": "milp"
     },
     {
@@ -51,7 +51,7 @@
       "walked_miles": 24.13,
       "offtrail_miles": 0.0,
       "repeat_miles": 3.07,
-      "time_h": 6.999,
+      "time_h": 7.0,
       "time_budget_h": 7.0,
       "feasible": true,
       "n_arcs": 92,
@@ -79,10 +79,10 @@
       "walked_miles": 27.47,
       "offtrail_miles": 0.0,
       "repeat_miles": 2.16,
-      "time_h": 6.999,
+      "time_h": 6.998,
       "time_budget_h": 7.0,
       "feasible": true,
-      "n_arcs": 96,
+      "n_arcs": 95,
       "source": "milp"
     },
     {
@@ -96,7 +96,7 @@
       "time_h": 7.0,
       "time_budget_h": 7.0,
       "feasible": true,
-      "n_arcs": 107,
+      "n_arcs": 106,
       "source": "milp"
     },
     {
@@ -107,7 +107,7 @@
       "walked_miles": 30.93,
       "offtrail_miles": 0.0,
       "repeat_miles": 3.42,
-      "time_h": 6.988,
+      "time_h": 6.999,
       "time_budget_h": 7.0,
       "feasible": true,
       "n_arcs": 103,
