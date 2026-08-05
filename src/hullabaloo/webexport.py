@@ -6,11 +6,16 @@ The static site under ``docs/`` reads two kinds of file from ``docs/data/``:
 ``preset_p<NNN>.json``  one solved itinerary, at pace factor ``NNN / 100``.
 
 The design decision worth stating: **everything the browser needs is computed here.**
-Each step carries its own geometry, its traversal category, and the running totals as of
-that step, so the page is a renderer and nothing more. The obvious alternative — ship
-bare node pairs and rebuild geometry client-side against a separate network file — costs
-a few hundred lines of fragile JavaScript whose failure mode is silently drawing the
-wrong line. We own the exporter, so we pay that cost once, in Python, where it is tested.
+Each step carries its own geometry, its traversal category, its turn cue and the running
+totals as of that step, so the page is a renderer and nothing more. The obvious
+alternative — ship bare node pairs and rebuild geometry client-side against a separate
+network file — costs a few hundred lines of fragile JavaScript whose failure mode is
+silently drawing the wrong line. We own the exporter, so we pay that cost once, in Python,
+where it is tested.
+
+The turn cue is the sharpest case for that rule. It has to be measured on the projected
+line *before* export simplifies it, so computing it in the browser would not merely be
+untidy — it would be measuring the wrong shape.
 
 Distances are miles, durations seconds, elevations feet, coordinates ``[lat, lon]`` in
 WGS84 — the units the page displays, so the front end never converts anything.
@@ -27,7 +32,15 @@ import pandas as pd
 from shapely.geometry import LineString
 
 from .config import CONFIG, CRS_GEOGRAPHIC, FT_PER_M, M_PER_MILE, ROOT, RaceParams
-from .export import _group_arcs, leg_label, route_gdf
+from .export import (
+    TURN_GLYPHS,
+    _group_arcs,
+    classify_turn,
+    leg_geometries,
+    leg_label,
+    route_gdf,
+    turn_cues,
+)
 from .graph import Network, Route
 
 log = logging.getLogger(__name__)
@@ -43,7 +56,8 @@ WEB_SIMPLIFY_M = 2.0
 #: traces, so rounding here discards noise rather than signal.
 COORD_DECIMALS = 5
 
-SCHEMA_VERSION = 1
+#: 2 added per-step turn cues (``turn``, ``turn_deg``, ``glyph``).
+SCHEMA_VERSION = 2
 
 
 # --------------------------------------------------------------------------------------
@@ -64,17 +78,6 @@ def _to_latlng(geoms: list[LineString], crs) -> list[list[list[float]]]:
         [[round(y, COORD_DECIMALS), round(x, COORD_DECIMALS)] for x, y in geom.coords]
         for geom in series
     ]
-
-
-def _stitch(geoms) -> LineString:
-    """Join consecutive arc geometries into one line, dropping duplicated joints."""
-    coords: list[tuple[float, float]] = []
-    for geom in geoms:
-        part = list(geom.coords)
-        if coords and coords[-1] == part[0]:
-            part = part[1:]
-        coords.extend(part)
-    return LineString(coords)
 
 
 # --------------------------------------------------------------------------------------
@@ -148,15 +151,19 @@ def preset_dict(
         for offset in range(leg["n_arcs"]):
             arc_to_leg[leg["arc0"] + offset] = index
 
-    geometries = _to_latlng(
-        [_stitch(detail.geometry.iloc[leg["arc0"] : leg["arc0"] + leg["n_arcs"]]) for leg in legs],
-        detail.crs,
-    )
+    # Turns come off the *unsimplified* projected lines, before `_to_latlng` touches them.
+    # Deriving them from the exported coordinates instead would measure a shape that has
+    # been Douglas-Peucker'd at 2 m and rounded to a metre, which is several degrees of
+    # slack on a 25 m window — enough to call a fork the wrong way.
+    leg_lines = leg_geometries(detail, legs)
+    geometries = _to_latlng(leg_lines, detail.crs)
+    cues = turn_cues(leg_lines)
 
     steps: list[dict] = []
     cum = {"seconds": 0.0, "miles": 0.0, "unique_miles": 0.0, "repeat_miles": 0.0,
            "offtrail_miles": 0.0}
-    for index, (leg, coords) in enumerate(zip(legs, geometries), start=1):
+    for index, (leg, coords, cue) in enumerate(zip(legs, geometries, cues), start=1):
+        turn_deg, turn_label, turn_glyph = cue
         miles = leg["length_m"] / M_PER_MILE
         cum["seconds"] += leg["time_s"]
         cum["miles"] += miles
@@ -173,6 +180,13 @@ def preset_dict(
                 "loss_ft": round(leg["loss_m"] * FT_PER_M),
                 "from_node": int(leg["from_node"]),
                 "to_node": int(leg["to_node"]),
+                # Which way to turn onto this leg, and by how much. The glyph ships
+                # alongside the label rather than being derived in JavaScript so that the
+                # page, its CSV download and outputs/route_cues.csv all print the same
+                # arrow for the same junction.
+                "turn": turn_label,
+                "turn_deg": turn_deg,
+                "glyph": turn_glyph,
                 "cum": {
                     "seconds": round(cum["seconds"], 1),
                     "miles": round(cum["miles"], 3),
@@ -368,6 +382,43 @@ def check_preset(document: dict, *, tol: float = 0.02) -> None:
     for step in steps:
         if not step["geometry"]:
             raise ValueError(f"step {step['i']} ({step['name']}) has no geometry")
+        check_turn(step)
+
+
+def check_turn(step: dict) -> None:
+    """A published turn cue must be internally consistent.
+
+    The glyph is what a racer actually reads, and it is the one field on a step that can be
+    wrong while every number around it still adds up. Asserting that it matches its own
+    label — and that both match the angle — is what stops a hand-edited preset shipping an
+    arrow that points the wrong way down a fork.
+    """
+    label, glyph, degrees = step.get("turn"), step.get("glyph"), step.get("turn_deg")
+
+    if label not in TURN_GLYPHS:
+        raise ValueError(f"step {step['i']} ({step['name']}) has unknown turn {label!r}")
+    if glyph != TURN_GLYPHS[label]:
+        raise ValueError(
+            f"step {step['i']} ({step['name']}) is labelled {label!r} but carries the "
+            f"glyph {glyph!r}, which means {TURN_GLYPHS[label]!r}"
+        )
+
+    # The first leg is walked from a standing start, so it has no incoming bearing and no
+    # angle. Every other leg must have one, or the cue was never computed.
+    if (label == "start") != (degrees is None):
+        raise ValueError(
+            f"step {step['i']} ({step['name']}) is {label!r} with turn_deg {degrees!r} — "
+            "only the opening leg may have no angle"
+        )
+    if degrees is None:
+        return
+    if not -180.0 <= degrees <= 180.0:
+        raise ValueError(f"step {step['i']} turn_deg {degrees} is outside [-180, 180]")
+    if classify_turn(degrees) != label:
+        raise ValueError(
+            f"step {step['i']} ({step['name']}) says {label!r} but {degrees}° classifies "
+            f"as {classify_turn(degrees)!r}"
+        )
 
 
 def caps_binding(totals: dict, race_block: dict | None = None) -> list[str]:

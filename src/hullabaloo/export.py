@@ -6,13 +6,15 @@ Outputs
                       route, depot. This is the "single topologically sound geospatial
                       file" the project set out to produce.
 ``route.gpx``         the tour as a GPX track, loadable onto a watch or phone.
-``route_cues.csv``    turn-by-turn cue sheet with running time and running score.
+``route_cues.csv``    turn-by-turn cue sheet: which way to turn onto each leg, with
+                      running time and running score.
 ``route_map.png``     static overview for the README.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -234,14 +236,149 @@ def _group_arcs(detail: pd.DataFrame, key_fn: Callable[[object], object]) -> lis
     return legs
 
 
+def _stitch(geoms) -> LineString:
+    """Join consecutive arc geometries into one line, dropping duplicated joints."""
+    coords: list[tuple[float, float]] = []
+    for geom in geoms:
+        part = list(geom.coords)
+        if coords and coords[-1] == part[0]:
+            part = part[1:]
+        coords.extend(part)
+    return LineString(coords)
+
+
+def leg_geometries(detail: pd.DataFrame, legs: list[dict]) -> list[LineString]:
+    """One stitched line per leg, oriented in the direction the leg is walked.
+
+    Legs are runs of consecutive arcs, so ``arc0`` and ``n_arcs`` locate them exactly.
+    Shared by the cue sheet and the web export so the two cannot disagree about where a
+    leg begins — which would put their turn cues at different junctions.
+    """
+    return [
+        _stitch(detail.geometry.iloc[leg["arc0"] : leg["arc0"] + leg["n_arcs"]])
+        for leg in legs
+    ]
+
+
+# --------------------------------------------------------------------------------------
+# Turn cues
+# --------------------------------------------------------------------------------------
+
+#: Class boundaries in degrees of heading change, measured positive to the right. Eight
+#: classes rather than four because junctions on this network are usually forks rather than
+#: crossroads: "bear right" and "hard right" send a racer down different trails, and a cue
+#: sheet that calls both of them "right" is worse than no cue at all.
+TURN_STRAIGHT_DEG = 20.0
+TURN_SLIGHT_DEG = 55.0
+TURN_PLAIN_DEG = 125.0
+TURN_SHARP_DEG = 165.0
+
+#: Bearings are measured over this much of the line rather than off its terminal segment.
+#: Noding snaps endpoints up to ``snap_tol_m`` (18 m) onto a cluster centroid and
+#: ``min_edge_len_m`` is 1 m, so the last coordinate pair of an arc is dominated by that
+#: displacement rather than by the trail's alignment. A window long enough to contain real
+#: trail is what makes the angle mean anything.
+BEARING_WINDOW_M = 25.0
+
+#: The arrow points where you go, relative to the way you were already facing. Shipped as
+#: a character rather than a code the front end maps, for the reason ``webexport`` gives
+#: for shipping geometry: computed once, in one place, so the page, the CSV download and
+#: ``route_cues.csv`` cannot drift into three different vocabularies.
+TURN_GLYPHS = {
+    "start": "●",         # ● — the first leg has nothing to turn from
+    "straight": "↑",      # ↑
+    "slight right": "↗",  # ↗
+    "right": "→",         # →
+    "sharp right": "↘",   # ↘
+    "turn around": "↩",   # ↩
+    "sharp left": "↙",    # ↙
+    "left": "←",          # ←
+    "slight left": "↖",   # ↖
+}
+
+
+def _bearing_deg(
+    line: LineString, *, from_start: bool, window_m: float = BEARING_WINDOW_M
+) -> float:
+    """Compass bearing of ``line`` at one of its ends, taken over ``window_m``.
+
+    The working CRS is EPSG:6346 — UTM 17N in metres — so this is planar trigonometry
+    against grid north, and the grid convergence it ignores is a small fraction of a degree
+    across a network eight kilometres wide. Nothing here needs geodesic azimuths.
+
+    Note ``atan2(dx, dy)``, not the usual ``atan2(dy, dx)``: a compass bearing is measured
+    clockwise from north, not anticlockwise from east.
+    """
+    span = min(window_m, line.length)
+    if span <= 0:
+        return 0.0
+    if from_start:
+        tail, head = line.interpolate(0.0), line.interpolate(span)
+    else:
+        tail, head = line.interpolate(line.length - span), line.interpolate(line.length)
+    return math.degrees(math.atan2(head.x - tail.x, head.y - tail.y)) % 360.0
+
+
+def classify_turn(delta_deg: float) -> str:
+    """Name the turn a signed heading change describes."""
+    magnitude = abs(delta_deg)
+    if magnitude < TURN_STRAIGHT_DEG:
+        return "straight"
+    if magnitude > TURN_SHARP_DEG:
+        # Not necessarily a mistake: the route doubles back out of dead-end trails
+        # deliberately, because the points are in walking them, not in going anywhere.
+        return "turn around"
+    side = "right" if delta_deg > 0 else "left"
+    if magnitude < TURN_SLIGHT_DEG:
+        return f"slight {side}"
+    if magnitude < TURN_PLAIN_DEG:
+        return side
+    return f"sharp {side}"
+
+
+def turn_between(
+    incoming: LineString | None, outgoing: LineString
+) -> tuple[float | None, str, str]:
+    """``(signed degrees, label, glyph)`` for the junction between two consecutive legs."""
+    if incoming is None or incoming.length <= 0 or outgoing.length <= 0:
+        return None, "start", TURN_GLYPHS["start"]
+    inbound = _bearing_deg(incoming, from_start=False)
+    outbound = _bearing_deg(outgoing, from_start=True)
+    # Rounded before classifying, not after: publishing 20.0° next to "straight" because
+    # 19.96° was binned and *then* rounded is the kind of inconsistency check_turn exists
+    # to catch, and it would be this function's fault.
+    delta = round((outbound - inbound + 180.0) % 360.0 - 180.0, 1)
+    label = classify_turn(delta)
+    return delta, label, TURN_GLYPHS[label]
+
+
+def turn_cues(geometries: list[LineString]) -> list[tuple[float | None, str, str]]:
+    """One turn per leg, each computed against the leg walked before it."""
+    return [
+        turn_between(geometries[i - 1] if i else None, geometry)
+        for i, geometry in enumerate(geometries)
+    ]
+
+
+# --------------------------------------------------------------------------------------
+# Cue sheet
+# --------------------------------------------------------------------------------------
+
+
 def cue_sheet(route: Route) -> pd.DataFrame:
     """Collapse consecutive arcs on the same trail into one human-readable instruction."""
     detail = route_gdf(route)
     if detail.empty:
         return pd.DataFrame()
 
-    out = pd.DataFrame(_group_arcs(detail, leg_label))
+    legs = _group_arcs(detail, leg_label)
+    cues = turn_cues(leg_geometries(detail, legs))
+
+    out = pd.DataFrame(legs)
     out.insert(0, "leg", range(1, len(out) + 1))
+    out["glyph"] = [glyph for _, _, glyph in cues]
+    out["turn"] = [label for _, label, _ in cues]
+    out["turn_deg"] = [delta for delta, _, _ in cues]
     out["miles"] = (out["length_m"] / 1609.344).round(2)
     out["leg_min"] = (out["time_s"] / 60).round(1)
     out["elapsed"] = out["elapsed_s"].apply(
@@ -250,6 +387,9 @@ def cue_sheet(route: Route) -> pd.DataFrame:
     return out[
         [
             "leg",
+            "glyph",
+            "turn",
+            "turn_deg",
             "segment",
             "off_trail",
             "miles",

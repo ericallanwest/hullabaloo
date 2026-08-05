@@ -523,6 +523,118 @@ def test_group_arcs_splits_a_first_pass_from_an_adjacent_repeat():
     assert len(_group_arcs(detail, lambda row: (leg_label(row), row.cat))) == 2
 
 
+def test_turns_are_named_from_the_angle_between_two_legs():
+    """The cue a racer reads at a junction, checked against geometry with a known answer.
+
+    Bearings are planar in EPSG:6346, so a leg drawn straight up the page heads due north
+    and every turn off it can be written down by hand.
+    """
+    from shapely.geometry import LineString
+
+    from hullabaloo.export import TURN_GLYPHS, turn_between
+
+    northbound = LineString([(0, -100), (0, 0)])
+    expected = {
+        "straight": (0, 100),
+        "slight right": (40, 100),
+        "right": (100, 0),
+        "sharp right": (60, -100),
+        "turn around": (0, -100),
+        "sharp left": (-60, -100),
+        "left": (-100, 0),
+        "slight left": (-40, 100),
+    }
+    for label, end in expected.items():
+        degrees, got, glyph = turn_between(northbound, LineString([(0, 0), end]))
+        assert got == label, f"{end} off due north should read {label}, not {got}"
+        assert glyph == TURN_GLYPHS[label]
+        assert -180.0 <= degrees <= 180.0
+
+    # The opening leg is walked from a standing start: no incoming bearing, so no angle.
+    assert turn_between(None, northbound) == (None, "start", TURN_GLYPHS["start"])
+
+
+def test_turn_angles_are_mirror_symmetric():
+    """Reflecting the route east-west must swap left for right and nothing else.
+
+    This is the property that catches a sign error, which is the failure mode that matters:
+    a turn cue pointing confidently the wrong way down a fork is worse than no cue.
+    """
+    from shapely.geometry import LineString
+
+    from hullabaloo.export import turn_between
+
+    northbound = LineString([(0, -100), (0, 0)])
+    for end in [(40, 100), (100, 0), (60, -100), (0, 100)]:
+        right, right_label, _ = turn_between(northbound, LineString([(0, 0), end]))
+        left, left_label, _ = turn_between(northbound, LineString([(0, 0), (-end[0], end[1])]))
+        assert right == pytest.approx(-left)
+        assert right_label.replace("right", "") == left_label.replace("left", "")
+
+
+def test_a_short_leg_still_gets_a_bearing():
+    """Legs shorter than the 25 m bearing window are common — the depot access link is 21 m
+    — and must degrade to their own length rather than raising or reading as straight."""
+    from shapely.geometry import LineString
+
+    from hullabaloo.export import BEARING_WINDOW_M, turn_between
+
+    stub = LineString([(0, 0), (5, 0)])          # 5 m due east, well under the window
+    assert stub.length < BEARING_WINDOW_M
+    degrees, label, _ = turn_between(LineString([(0, -50), (0, 0)]), stub)
+    assert label == "right"
+    assert degrees == pytest.approx(90.0)
+
+
+def test_every_step_carries_a_consistent_turn(net, sample_route):
+    """Turns on a real route: one per leg, self-consistent, and only the first is a start."""
+    from hullabaloo import webexport
+
+    steps = webexport.preset_dict(
+        net, sample_route, pace_factor=CONFIG.tobler.pace_factor
+    )["steps"]
+
+    assert [s["turn"] for s in steps].count("start") == 1
+    assert steps[0]["turn"] == "start" and steps[0]["turn_deg"] is None
+    for step in steps[1:]:
+        assert step["turn_deg"] is not None
+        webexport.check_turn(step)  # glyph, label and angle must agree
+
+
+def test_a_glyph_that_contradicts_its_label_is_rejected(net, sample_route):
+    """The glyph is the one field on a step that can be wrong while every number around it
+    still adds up, so a hand-edited preset must not be able to publish a bad arrow."""
+    import copy
+
+    from hullabaloo import webexport
+
+    document = webexport.preset_dict(net, sample_route, pace_factor=CONFIG.tobler.pace_factor)
+    webexport.check_preset(document)
+
+    lying = copy.deepcopy(document)
+    lying["steps"][1]["glyph"] = webexport.TURN_GLYPHS["left"]
+    lying["steps"][1]["turn"] = "right"
+    with pytest.raises(ValueError, match="glyph"):
+        webexport.check_preset(lying)
+
+    mislabelled = copy.deepcopy(document)
+    mislabelled["steps"][1].update(turn="straight", glyph=webexport.TURN_GLYPHS["straight"],
+                                   turn_deg=90.0)
+    with pytest.raises(ValueError, match="classifies"):
+        webexport.check_preset(mislabelled)
+
+
+def test_the_cue_sheet_tells_you_which_way_to_turn(sample_route):
+    """``route_cues.csv`` is the artifact a racer prints, and its whole job is junctions."""
+    from hullabaloo.export import TURN_GLYPHS, cue_sheet
+
+    cues = cue_sheet(sample_route)
+    assert list(cues.columns)[:4] == ["leg", "glyph", "turn", "turn_deg"]
+    assert cues["turn"].iloc[0] == "start"
+    assert set(cues["turn"]) <= set(TURN_GLYPHS)
+    assert cues["turn_deg"].iloc[1:].notna().all()
+
+
 def test_preset_document_reconciles(net, sample_route):
     from hullabaloo import webexport
 
