@@ -148,6 +148,9 @@ body.sidebar-hidden #sidebar-toggle { right: 0; }
 .itin-step:hover  { background: var(--bg); }
 .itin-step.active { background: var(--active-bg); border-left: 3px solid #FFD700; }
 .itin-step .itin-n    { font-weight: 700; }
+/* The turn arrow is the one glyph in this list a racer reads at speed, so it gets a size
+   of its own rather than inheriting the 11px the rest of the row is set in. */
+.itin-step .itin-turn { color: var(--accent); font-size: 14px; line-height: 1; cursor: help; }
 .itin-step .itin-tag  { color: var(--accent); font-size: 10px; }
 .itin-step .itin-meta { color: var(--muted); padding-left: 12px; display: block; }
 .itin-step .itin-done { color: var(--badge-text); background: var(--badge-bg); border-radius: 8px; font-size: 9px; padding: 0 6px; white-space: nowrap; }
@@ -159,6 +162,10 @@ body.sidebar-hidden #sidebar-toggle { right: 0; }
   padding: 4px 11px; border-radius: 4px; cursor: pointer; font-size: 12px; white-space: nowrap;
 }
 .btn:hover   { background: var(--accent); color: #fff; }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn:disabled:hover { background: var(--control); color: var(--text); }
+/* The one button in the left pane; the rest live in the bottom control bar. */
+.btn-csv     { width: 100%; margin-top: 14px; }
 .day-lbl     { color: var(--accent); font-weight: 700; font-size: 13px; min-width: 90px; text-align: center; }
 .toggle-row  { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
 .toggle-row label { display: flex; align-items: center; gap: 4px; cursor: pointer; font-size: 11px; color: var(--muted); }

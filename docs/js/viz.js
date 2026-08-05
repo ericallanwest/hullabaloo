@@ -42,12 +42,32 @@ const CAT_COLOR = { unique: '#f7882f', offtrail: '#c0392b', repeat: '#c0392b' };
 const CAT_LABEL = { unique: '', offtrail: 'road', repeat: 'repeat' };
 const GOLD = '#FFD700';
 
+// Two reds, and the difference between them is the whole point of the layer: this pale
+// dashed one is road that is *available* — legal, walkable, on the map from the first step
+// whether the route uses it or not — while CAT_COLOR.offtrail (#c0392b, solid) is road the
+// itinerary actually walks. Matched to the Smokies planner's Connector styling, which
+// draws the same distinction on the same kind of network.
+const ROAD_AVAILABLE = { color: '#f08080', weight: 4, opacity: 0.65, dashArray: '4,6' };
+
 // Network grays flip with the UI theme: a mid gray that reads as "faint" on a light
 // basemap disappears entirely on a dark one. Note the two move in *opposite* directions
 // when the goal is legibility — the light-theme gray gets darker, the dark-theme gray gets
 // lighter. Both are steps away from the background, which is the thing that matters.
 const NET_THEMES = { light: '#6e6e6e', dark: '#8a8a99' };
 let netColor = NET_THEMES.light;
+
+// Name labels ride the lines themselves rather than sitting in boxes, so they need a halo
+// to stay legible over aerial imagery — the fill is the text, the stroke is painted behind
+// it. Same reasoning as the network grays: the pair inverts with the theme.
+const LABEL_THEMES = {
+  light: { fill: '#2b2b33', halo: '#ffffff' },
+  dark:  { fill: '#e6e7ee', halo: '#15171e' },
+};
+let labelTheme = LABEL_THEMES.light;
+
+// Below this the network is a tangle and every name would overlap its neighbours. At 15 a
+// tenth-mile edge is about 40 px across, which is roughly where a short name starts to fit.
+const LABEL_MIN_ZOOM = 15;
 
 // ── Utilities ──────────────────────────────────────────────────────────────
 // Round to whole minutes *first*, then split. Taking the hour before rounding the
@@ -125,10 +145,19 @@ let stepPlayTimer = null;
 let startMarker = null;
 let homeBounds = null;
 
+const roadGroup   = L.layerGroup();   // every road in the network, walked or not
 const netGroup    = L.layerGroup();   // full trail network, gray backdrop
 const walkedGroup = L.layerGroup();   // steps already taken
 const arrowGroup  = L.layerGroup();   // direction-of-travel arrowheads
 const currentGroup = L.layerGroup();  // the step under the slider
+const labelGroup  = L.layerGroup();   // invisible lines that exist only to carry text
+
+// The labels hang off invisible copies of the network lines rather than off the lines
+// themselves, for one reason: SVG text on a path runs in the path's own direction, so a
+// trail digitised east-to-west renders its name mirrored and upside down. The carrier can
+// be reversed to read left-to-right without disturbing the line the map actually draws,
+// which still has to run the way the route walks it for the arrowheads to point right.
+let labelLines = [];
 
 // ── Drawing helpers ────────────────────────────────────────────────────────
 function stepStyle(step) {
@@ -149,7 +178,9 @@ function stepVisible(step) {
 function stepPopup(step) {
   const tag = CAT_LABEL[step.cat];
   const kind = step.cat === 'offtrail' ? 'road' : tag;
+  const turn = step.turn ? `${step.glyph} ${esc(step.turn)}<br>` : '';
   return `<b>${esc(step.name)}</b>${kind ? ` <i>(${kind})</i>` : ''}<br>` +
+    turn +
     `node ${step.from_node} → ${step.to_node}<br>` +
     `${step.miles.toFixed(2)} mi &nbsp; ${fmtMS(step.seconds)}<br>` +
     `+${step.gain_ft} ft ↑ / −${step.loss_ft} ft ↓<br>` +
@@ -175,16 +206,87 @@ function addStepLine(group, step, options, arrowColor) {
 // ── Rendering ──────────────────────────────────────────────────────────────
 function drawNetwork() {
   netGroup.clearLayers();
+  roadGroup.clearLayers();
+  labelGroup.clearLayers();
+  labelLines = [];
   if (!NETWORK) return;
 
   // Edges the current route walks are drawn by the step layers on top; the backdrop is
   // deliberately the *whole* network, so the unwalked remainder stays visible as the
   // thing the seven-hour budget could not reach.
+  //
+  // Roads split off into their own layer because they are a different kind of ground, not
+  // a different part of the route: they cost time and earn nothing, so which ones exist is
+  // a fact about the network that a racer wants before the first step, not a consequence
+  // of the itinerary. `kind` has always been in network.json; nothing read it until now.
   for (const edge of NETWORK.edges) {
-    L.polyline(edge.geometry, { color: netColor, weight: 3, opacity: 0.75 })
-      .bindTooltip(`${esc(edge.name)} — ${edge.miles.toFixed(2)} mi`,
+    const road = edge.kind !== 'trail';
+    L.polyline(edge.geometry,
+      road ? ROAD_AVAILABLE : { color: netColor, weight: 3, opacity: 0.75 })
+      .bindTooltip(`${esc(edge.name)} — ${edge.miles.toFixed(2)} mi${road ? ' (road)' : ''}`,
         { sticky: true, opacity: 0.85 })
-      .addTo(netGroup);
+      .addTo(road ? roadGroup : netGroup);
+
+    // Reversed when the edge runs east to west, so the name reads left to right instead of
+    // mirrored. Longitude is enough to decide it: the sign of east never changes with zoom.
+    const path = edge.geometry;
+    const westward = path[path.length - 1][1] < path[0][1];
+    // interactive:false so an invisible line can never swallow a click meant for the
+    // visible one underneath it, which would break every tooltip and popup on the map.
+    labelLines.push({
+      name: edge.name,
+      line: L.polyline(westward ? [...path].reverse() : path, {
+        opacity: 0, weight: 1, interactive: false,
+      }).addTo(labelGroup),
+    });
+  }
+  refreshLabels();
+}
+
+// Rough width of a string at the label's own font, with room to breathe at either end.
+// Only ever used to decide whether a name fits its line, so an estimate is enough — and it
+// is the *only* thing standing between this map and a hundred half-drawn names, because
+// SVG happily clips text that runs off the end of its path rather than declining to draw
+// it. Erring generous costs a few labels; erring tight costs legibility.
+function labelWidthPx(text) {
+  return text.length * 6.2 + 24;
+}
+
+function polylinePixelLength(line) {
+  const points = line.getLatLngs().map(ll => map.latLngToLayerPoint(ll));
+  let total = 0;
+  for (let i = 1; i < points.length; i++) total += points[i].distanceTo(points[i - 1]);
+  return total;
+}
+
+// Re-applied on every zoom rather than styled once, because whether a name fits is a fact
+// about the current scale, not about the edge.
+function refreshLabels() {
+  if (!labelLines.length) return;
+  const on = $('togLabels').checked && map.getZoom() >= LABEL_MIN_ZOOM;
+
+  for (const { name, line } of labelLines) {
+    // Cleared first without exception. leaflet-textpath only reclaims its old <text> node
+    // on setText(null) — setting fresh text over existing text appends a second node and
+    // orphans the first, so labelling the same edge at ten zoom levels leaves ten stacked
+    // copies of the name quietly thickening on the map.
+    line.setText(null);
+    if (!on || labelWidthPx(name) > polylinePixelLength(line)) continue;
+    line.setText(` ${name} `, {
+      center: true,
+      offset: -4,                 // lift the baseline clear of the line it rides
+      attributes: {
+        'font-size': '11px',
+        'font-weight': '600',
+        'font-family': 'system-ui, sans-serif',
+        fill: labelTheme.fill,
+        stroke: labelTheme.halo,
+        'stroke-width': 3,
+        'stroke-linejoin': 'round',
+        'paint-order': 'stroke',   // halo behind the glyphs, not smeared over them
+        'pointer-events': 'none',  // a label must never intercept a click on its own line
+      },
+    });
   }
 }
 
@@ -253,21 +355,32 @@ function cumThrough(step) {
   return totals;
 }
 
-function buildItinerary() {
+// Which trails a step finishes off, keyed by step number. Shared by the itinerary and the
+// CSV download so the two cannot credit a completion to different steps.
+function completionsByStep() {
   const completedAt = new Map();
   for (const trail of PRESET.trails)
     if (trail.completed_at_step) {
       if (!completedAt.has(trail.completed_at_step)) completedAt.set(trail.completed_at_step, []);
       completedAt.get(trail.completed_at_step).push(trail.name);
     }
+  return completedAt;
+}
+
+function buildItinerary() {
+  const completedAt = completionsByStep();
 
   $('itinerary').innerHTML = PRESET.steps.map(s => {
     const tag = s.cat === 'repeat' ? 'repeat'
               : s.cat === 'offtrail' ? 'road' : '';
     const done = completedAt.get(s.i);
+    // The turn is precomputed in webexport.py from the unsimplified geometry — the glyph
+    // arrives ready to print, so this stays a renderer.
+    const turn = s.glyph
+      ? ` <span class="itin-turn" title="${esc(s.turn)}">${s.glyph}</span>` : '';
     return `<div class="itin-step" data-step="${s.i}">
       <span class="itin-n" style="color:${CAT_COLOR[s.cat]}">${s.i}.</span>
-      <b>${esc(s.name)}</b>${tag ? ` <span class="itin-tag">(${tag})</span>` : ''}
+      <b>${esc(s.name)}</b>${turn}${tag ? ` <span class="itin-tag">(${tag})</span>` : ''}
       ${done ? ` <span class="itin-done">✓ ${done.length} trail${done.length > 1 ? 's' : ''}</span>` : ''}
       <span class="itin-meta">
         ${s.miles.toFixed(2)} mi &nbsp; ${fmtMS(s.seconds)} &nbsp; ${s.gain_ft} ft ↑ / ${s.loss_ft} ft ↓<br>
@@ -320,6 +433,93 @@ function renderPresetInfo() {
       : '');
 }
 
+// ── CSV download ───────────────────────────────────────────────────────────
+// A racer wants the plan on paper or on a phone, not behind a slider. Everything printed
+// here is read straight off the preset and through the same formatters the sidebar uses,
+// so the file cannot quietly disagree with the screen it was downloaded from.
+function csvCell(value) {
+  const text = value == null ? '' : String(value);
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+const csvRow = (...cells) => cells.map(csvCell).join(',');
+
+function buildCsv() {
+  const t = PRESET.totals, solver = PRESET.solver || {};
+  const opt = PRESET.optimality || { caps_binding: [], proven: null };
+  const run = cumThrough(t.n_steps);
+  const completedAt = completionsByStep();
+
+  const meta = [
+    ['Hullabaloo Route Planner'],
+    ['Pace factor', PRESET.pace_factor.toFixed(2)],
+    ['Score', fmtScore(t.score)],
+    ['Trails completed', `${t.trails_completed} of ${PRESET.network.n_trails}`],
+    ['Unique trail miles', t.unique_miles.toFixed(2)],
+    ['Distance walked', `${t.walked_miles.toFixed(2)} mi`],
+    ['Repeat miles', t.repeat_miles.toFixed(2)],
+    ['Road miles', t.offtrail_miles.toFixed(2)],
+    ['Elevation', `${run.gain.toLocaleString()} ft up / ${run.loss.toLocaleString()} ft down`],
+    ['Finish time', fmtClock(t.time_s)],
+    ['Time budget', fmtClock(PRESET.race.time_budget_s)],
+    ['Steps', t.n_steps],
+    ['Proven optimal', opt.caps_binding.length ? `no — ${opt.caps_binding.join('; ')}`
+                                               : (opt.proven ? 'yes' : 'no')],
+    ['Solver', `${solver.source || '?'} (${solver.status || '?'}` +
+               `${solver.gap_pct != null ? `, gap ${solver.gap_pct.toFixed(1)}%` : ''})`],
+    ['Network', `${PRESET.network.total_miles} mi / ${PRESET.network.n_trails} trails`],
+    ['Scoring', 'Score = trails completed + unique trail miles'],
+    ['Generated', new Date().toISOString()],
+    ['Source', 'https://ericallanwest.github.io/hullabaloo/'],
+  ];
+
+  const header = csvRow(
+    'step', 'turn', 'cue', 'name', 'type', 'miles', 'minutes', 'gain_ft', 'loss_ft',
+    'clock', 'elapsed', 'cum_miles', 'cum_unique_miles', 'cum_repeat_miles',
+    'cum_road_miles', 'cum_trails', 'cum_score', 'trails_completed_here',
+  );
+
+  const rows = PRESET.steps.map(s => csvRow(
+    s.i,
+    s.glyph || '',
+    s.turn || '',
+    s.name,
+    s.cat === 'offtrail' ? 'road' : s.cat === 'repeat' ? 'repeat' : 'trail',
+    s.miles.toFixed(2),
+    (s.seconds / 60).toFixed(1),
+    s.gain_ft,
+    s.loss_ft,
+    fmtTimeOfDay(s.cum.seconds),
+    fmtClock(s.cum.seconds),
+    s.cum.miles.toFixed(3),
+    s.cum.unique_miles.toFixed(3),
+    s.cum.repeat_miles.toFixed(3),
+    s.cum.offtrail_miles.toFixed(3),
+    s.cum.trails_completed,
+    fmtScore(s.cum.score),
+    (completedAt.get(s.i) || []).join('; '),
+  ));
+
+  return [...meta.map(cells => csvRow(...cells)), '', header, ...rows].join('\r\n');
+}
+
+function downloadCsv() {
+  if (!PRESET) return;
+  // The BOM is load-bearing: without it Excel on Windows reads the file as the local
+  // codepage and turns every turn arrow — and every apostrophe in a trail name — into
+  // mojibake, which would defeat the point of putting glyphs in the file at all.
+  const blob = new Blob(['﻿' + buildCsv()], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `hullabaloo_route_pace${PRESET.pace_factor.toFixed(2)}.csv`;
+  link.click();
+  // Revoked on the next tick rather than immediately: the click only *starts* the save, and
+  // browsers that read the blob asynchronously will hand back an empty file if the URL has
+  // already been torn down under them.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 function showPreset(preset) {
   PRESET = preset;
   currentStep = 1;
@@ -340,6 +540,7 @@ function showPreset(preset) {
   renderPresetInfo();
   buildItinerary();
   setStep(1);
+  $('btnCsv').disabled = false;   // nothing to download until an itinerary is on screen
 }
 
 // ── Basemaps ───────────────────────────────────────────────────────────────
@@ -474,7 +675,17 @@ document.addEventListener('DOMContentLoaded', () => {
     { attribution: 'Hillshade &copy; Esri', maxZoom: 16, opacity: 0.15, zIndex: 2 },
   ).addTo(map);
 
-  [netGroup, walkedGroup, currentGroup, arrowGroup].forEach(g => g.addTo(map));
+  // roadGroup first: roads are context for the trails, so the gray network draws over them
+  // where the two run close together rather than the other way round.
+  [roadGroup, netGroup, walkedGroup, currentGroup, arrowGroup].forEach(g => g.addTo(map));
+
+  // leaflet-textpath appends its <text> to the renderer's <svg> rather than into the <g>
+  // that holds the paths, so labels always paint above every line in the pane no matter how
+  // often renderStep() tears the walked and current layers down and rebuilds them. That is
+  // the stacking we want, and it comes free — a custom pane would not help, because the
+  // plugin puts the text in the map's default renderer regardless of the layer's own.
+  labelGroup.addTo(map);
+  map.on('zoomend', refreshLabels);
 
   // ── Pane toggles ─────────────────────────────────────────────────────────
   $('left-toggle').addEventListener('click', () => {
@@ -514,6 +725,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (geom?.length) map.fitBounds(L.latLngBounds(geom).pad(0.25));
   });
   $('btnHome').addEventListener('click', goHome);
+  $('btnCsv').addEventListener('click', downloadCsv);
 
   document.addEventListener('keydown', e => {
     if (e.target.matches('input, select, textarea')) return;
@@ -523,7 +735,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ── Layer toggles ────────────────────────────────────────────────────────
   $('togRepeat').addEventListener('change', () => renderStep(currentStep));
-  $('togRoads').addEventListener('change', () => renderStep(currentStep));
+  // One checkbox, both senses of "road": the available network underneath and the road
+  // legs of the walk on top. Hiding one while leaving the other would be a puzzle.
+  $('togRoads').addEventListener('change', function () {
+    if (this.checked) roadGroup.addTo(map); else map.removeLayer(roadGroup);
+    renderStep(currentStep);
+  });
+  $('togLabels').addEventListener('change', refreshLabels);
 
   // ── Opacity + basemap ────────────────────────────────────────────────────
   $('mapwarpOpacity').addEventListener('input', function () {
@@ -560,6 +778,8 @@ document.addEventListener('DOMContentLoaded', () => {
     netColor = dark ? NET_THEMES.dark : NET_THEMES.light;
     netGroup.eachLayer(l => l.setStyle && l.setStyle({ color: netColor }));
     $('legNet').style.background = netColor;
+    labelTheme = dark ? LABEL_THEMES.dark : LABEL_THEMES.light;
+    refreshLabels();
     $('btnDark').textContent = dark ? '☀️' : '🌙';
     // Swap the light defaults for the dark one and back, but leave a deliberate pick
     // like aerial or topo alone — someone who chose Bing Aerial meant it.

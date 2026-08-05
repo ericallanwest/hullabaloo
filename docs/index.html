@@ -5,6 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Hullabaloo Route Planner</title>
   <meta name="description" content="Step through the optimized route for the Hullabaloo 7-hour trail rogaine at Pandapas Pond, Virginia.">
+  <!-- NPS symbol-library "self-guiding trail", the same mark the Smokies planner uses.
+       Served from here rather than hotlinked off raw.githubusercontent.com, which ad and
+       privacy filters block and which rate-limits per IP. -->
+  <link rel="icon" type="image/svg+xml" href="icons/self-guiding-trail-black-22.svg">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <link rel="stylesheet" href="css/style.css"/>
 </head>
@@ -39,6 +43,8 @@
   </div>
   <div id="presetInfo"></div>
   <div id="presetError"></div>
+  <button class="btn btn-csv" id="btnCsv" disabled
+          title="The summary above plus the whole route, step by step">⬇ Download CSV</button>
 </div>
 <button id="left-toggle" title="Hide/show parameters">◀</button>
 
@@ -86,8 +92,9 @@
   <div class="sec-title">Legend</div>
   <div class="legend">
     <div><span class="leg-line" id="legNet" style="background:#6e6e6e"></span>Trail network — not yet walked</div>
+    <div><span class="leg-line" style="background:repeating-linear-gradient(90deg,#f08080 0 4px,transparent 4px 8px)"></span>Road — available, earns no points</div>
     <div><span class="leg-line" style="background:#f7882f"></span>Unique — first pass, scores</div>
-    <div><span class="leg-line" style="background:#c0392b"></span>Road — walked at full speed, earns no points</div>
+    <div><span class="leg-line" style="background:#c0392b"></span>Road — walked at full speed</div>
     <div><span class="leg-line" style="background:repeating-linear-gradient(90deg,#c0392b 0 5px,transparent 5px 9px)"></span>Repeat — no extra points</div>
     <div><span class="leg-line" style="background:#FFD700"></span>Current step</div>
   </div>
@@ -110,6 +117,7 @@
   <div class="toggle-row">
     <label><input type="checkbox" id="togRepeat" checked>   Repeats</label>
     <label><input type="checkbox" id="togRoads" checked>    Roads</label>
+    <label title="Names ride the lines once you are zoomed in past 15"><input type="checkbox" id="togLabels" checked> Labels</label>
   </div>
   <div class="opacity-row">
     <button class="btn" id="btnHome" title="Zoom to full map" style="margin-right:4px;padding:2px 8px">🏠</button>
@@ -146,6 +154,7 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/leaflet-polylinedecorator@1.6.0/dist/leaflet.polylineDecorator.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/leaflet-textpath@1.2.3/leaflet.textpath.js"></script>
 <script src="js/viz.js"></script>
 </body>
 </html>
