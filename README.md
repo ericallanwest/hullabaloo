@@ -57,7 +57,8 @@ Deliverables land in `outputs/`:
 - `hullabaloo.gpkg` — one multi-layer GeoPackage: `edges`, `nodes`, `trails`,
   `route`, `depot`
 - `route.gpx` — the tour as a GPX track with a predicted schedule, loadable onto a watch
-- `route_cues.csv` — turn-by-turn cue sheet with running time and running score
+- `route_cues.csv` — cue sheet: which way to turn onto each leg, with running time and
+  running score
 - `route_map.html` — interactive Leaflet map on USGS topo/imagery layers, for checking the
   model against reality
 - `route_map.png`, `run_report.json`
@@ -68,6 +69,23 @@ Deliverables land in `outputs/`:
 as you step, and the sidebar counts up the miles, the trails completed and the score. It is
 the fastest way to see *why* the route is shaped the way it is — where the plan spends a
 repeat to reach something worth more, and where it gives up on a trail entirely.
+
+Three things are on the map before you take a step. **Forest roads** draw as a dashed pale
+red, distinct from the grey trail network, because which roads exist is a fact about the
+ground rather than a consequence of the itinerary — they cost full-speed time and earn no
+points, and a racer wants to know where they run whether this route uses them or not. Past
+zoom 15, **names ride the lines themselves** rather than waiting for a hover, so the map can
+be read at a glance; a name is drawn only where its line is long enough to hold it, and the
+label rides a reversed copy of any line running east to west, since SVG text follows the
+path's own direction and would otherwise read backwards.
+
+The itinerary names a **turn** onto every leg — straight, slight, plain, sharp or turn
+around, eight classes in all — computed from the change in bearing at the junction. The
+angle is measured over 25 m of trail rather than off the terminal coordinate pair, because
+noding snapped every endpoint onto a cluster centroid up to 18 m away and the last segment
+of an arc is mostly that displacement. **⬇ Download CSV** hands the whole thing over: the
+summary block at the top, then a line per leg carrying the turn, the distance, the clock and
+the running score.
 
 The left-hand **pace factor** control switches between eleven pre-solved itineraries,
 from 1.0 (textbook Tobler) to 2.0. Pace is
@@ -96,10 +114,19 @@ python -m http.server -d docs # then open http://localhost:8000
 ```
 
 Everything the page needs is computed in [`src/hullabaloo/webexport.py`](src/hullabaloo/webexport.py)
-— geometry, traversal categories and running totals all arrive precomputed, so the
-JavaScript is a renderer and nothing more. `write_preset` refuses to publish an itinerary
-whose numbers do not reconcile, since a static file is trusted by readers who will never
-run the solver.
+— geometry, traversal categories, turn cues and running totals all arrive precomputed, so
+the JavaScript is a renderer and nothing more. `write_preset` refuses to publish an
+itinerary whose numbers do not reconcile, since a static file is trusted by readers who will
+never run the solver.
+
+The turn cues are a case where that division of labour is load-bearing rather than tidy.
+Exported geometry is simplified at 2 m and rounded to about a metre, which is several
+degrees of slack on a 25 m bearing — enough to call a fork the wrong way. Computing the
+angle in Python against the unsimplified projected line and shipping the answer is the only
+version that is right, and it means the page, its CSV download and `route_cues.csv` all
+print the same arrow for the same junction. `check_preset` asserts the glyph agrees with
+both its label and its angle, because a turn arrow is the one field on a step that can be
+wrong while every number around it still adds up.
 
 ### Where "proven optimal" stops being true
 
@@ -424,7 +451,8 @@ notebooks/         marimo (.py, git-diffable)
 docs/              static route planner, served by GitHub Pages
   index.html       panes, controls
   css/style.css    light + dark theme
-  js/viz.js        Leaflet rendering and step state
+  js/viz.js        Leaflet rendering, step state, CSV download
+  icons/           NPS self-guiding-trail mark, used as the favicon
   data/            network.json + one preset per pace factor
 tests/             34 tests
 ```
