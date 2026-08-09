@@ -32,6 +32,8 @@ import pandas as pd
 from shapely.geometry import LineString
 
 from .config import CONFIG, CRS_GEOGRAPHIC, FT_PER_M, M_PER_MILE, ROOT, RaceParams
+from .corridors import CorridorRule
+from .corridors import breakdown as corridor_breakdown
 from .export import (
     TURN_GLYPHS,
     _group_arcs,
@@ -42,6 +44,7 @@ from .export import (
     turn_cues,
 )
 from .graph import Network, Route
+from .tobler import KMH_TO_MPH
 
 log = logging.getLogger(__name__)
 
@@ -57,7 +60,27 @@ WEB_SIMPLIFY_M = 2.0
 COORD_DECIMALS = 5
 
 #: 2 added per-step turn cues (``turn``, ``turn_deg``, ``glyph``).
-SCHEMA_VERSION = 2
+#: 3 added speed branding (``speed_mph``, ``option``) and the corridor blocks.
+SCHEMA_VERSION = 3
+
+#: Oldest schema the page and the validator still read.
+#:
+#: The committed pace sweep is schema 2 and stays that way. Version 3 is a pure superset —
+#: it only adds keys — so nothing in a version 2 file is wrong, and re-solving eleven
+#: itineraries for two and a half hours to add fields the pace controls do not use would be
+#: churn rather than progress. The exporter writes 3; the reader accepts either; the speed
+#: tiers, which genuinely need the new keys, are required to be current by
+#: ``check_preset``. Drop this constant once the pace family is next rebuilt for its own
+#: reasons.
+MIN_SUPPORTED_SCHEMA = 2
+
+#: The six speeds the site publishes, in mph at Tobler's peak gradient. Mirrored by the
+#: manifest, which is what the page actually reads — this tuple is only the build's input.
+SPEED_TIERS = (5.0, 5.5, 6.0, 6.5, 7.0, 7.5)
+
+#: The three alternatives offered at each speed. ``a`` is the unconstrained optimum; ``b``
+#: and ``c`` take opposite sides of the pivotal corridor.
+OPTIONS = ("a", "b", "c")
 
 
 # --------------------------------------------------------------------------------------
@@ -129,6 +152,9 @@ def preset_dict(
     pace_factor: float,
     solver: dict | None = None,
     race: RaceParams | None = None,
+    option: str | None = None,
+    rule: CorridorRule | None = None,
+    free_score: float | None = None,
 ) -> dict:
     """Build the itinerary document for one solved route.
 
@@ -229,9 +255,31 @@ def preset_dict(
         "max_trail_points": float(race.max_trail_points),
     }
 
+    rule = rule or CorridorRule()
+
+    # Published to four places so the page never has to invert Tobler to say how fast this
+    # itinerary assumes you are. ``pace_factor`` is retained alongside it because it is
+    # what the model was actually priced with, and dropping it would make a preset
+    # impossible to reproduce from its own contents.
+    speed = pace_factor * CONFIG.tobler.base_kmh * KMH_TO_MPH
+
     return {
         "schema_version": SCHEMA_VERSION,
-        "pace_factor": round(float(pace_factor), 2),
+        "speed_mph": round(float(speed), 2),
+        "pace_factor": round(float(pace_factor), 4),
+        "option": option,
+        "option_label": rule.label,
+        "corridor_rule": rule.as_dict(),
+        "corridors": corridor_breakdown(net, route),
+        # How much this alternative gave up against the free optimum at the same speed.
+        # Negative or zero by construction: a constrained solve cannot beat an
+        # unconstrained one over the same network. ``None`` on option a, which *is* the
+        # free optimum and has nothing to be compared against.
+        "delta_vs_free": (
+            None
+            if free_score is None
+            else round(float(summary["score"]) - float(free_score), 3)
+        ),
         "race": race_block,
         "totals": totals,
         "optimality": optimality_block(totals, solver or {}, race_block),
@@ -252,12 +300,35 @@ def write_preset(
     pace_factor: float,
     solver: dict | None = None,
     directory: Path = WEB_DATA,
+    speed_mph: float | None = None,
+    option: str | None = None,
+    rule: CorridorRule | None = None,
+    free_score: float | None = None,
 ) -> Path:
-    """Write ``preset_p<NNN>.json`` and return its path."""
+    """Write one itinerary and return its path.
+
+    Names the file ``preset_s<NN><option>.json`` when an option is given and
+    ``preset_p<NNN>.json`` otherwise, which is the only difference between the two
+    published families — they share a schema, a validator and an exporter.
+    """
     directory.mkdir(parents=True, exist_ok=True)
-    path = directory / preset_filename(pace_factor)
-    document = preset_dict(net, route, pace_factor=pace_factor, solver=solver)
-    check_preset(document)
+    if option is None:
+        path = directory / preset_filename(pace_factor)
+    else:
+        if speed_mph is None:
+            raise ValueError("speed_mph is required when writing a speed-tier preset")
+        path = directory / preset_speed_filename(speed_mph, option)
+
+    document = preset_dict(
+        net,
+        route,
+        pace_factor=pace_factor,
+        solver=solver,
+        option=option,
+        rule=rule,
+        free_score=free_score,
+    )
+    check_preset(document, net=net, route=route, rule=rule)
     path.write_text(json.dumps(document, separators=(",", ":")), encoding="utf-8")
     log.info(
         "wrote %s — score %.3f, %d trails, %.2f h, %d KB",
@@ -271,8 +342,101 @@ def write_preset(
 
 
 def preset_filename(pace_factor: float) -> str:
-    """``1.3 -> 'preset_p130.json'`` — must match ``presetFile()`` in ``docs/js/viz.js``."""
+    """``1.3 -> 'preset_p130.json'`` — must match ``presetFile()`` in ``docs/js/viz.js``.
+
+    The legacy pace-sweep family. Kept because the sweep answers a different question from
+    the speed tiers — not "what should I run?" but "how much does the plan depend on my
+    guess about my own speed?" — and that is worth keeping publishable.
+    """
     return f"preset_p{round(pace_factor * 100):03d}.json"
+
+
+def preset_speed_filename(speed_mph: float, option: str) -> str:
+    """``(6.0, 'a') -> 'preset_s60a.json'`` — matches ``presetSpeedFile()`` in ``viz.js``.
+
+    Speeds are published on a half-mph grid, so one decimal place scaled by ten names every
+    tier exactly and keeps the files sorting in speed order.
+    """
+    if option not in OPTIONS:
+        raise ValueError(f"unknown option {option!r}; expected one of {OPTIONS}")
+    return f"preset_s{round(speed_mph * 10):02d}{option}.json"
+
+
+# --------------------------------------------------------------------------------------
+# Manifest
+# --------------------------------------------------------------------------------------
+
+
+def manifest_dict(directory: Path = WEB_DATA) -> dict:
+    """Index every published itinerary, built by reading what is actually on disk.
+
+    Deliberately a directory scan rather than a restatement of the build's input list. The
+    page used to learn which itineraries existed from a hardcoded set of radio buttons that
+    nothing checked against ``docs/data/`` — so a preset that failed to solve left a control
+    that 404s, and one that solved without a matching button was simply invisible. Deriving
+    the index from the files themselves makes both impossible: a control exists exactly when
+    the file behind it does.
+
+    Each entry carries its own label and headline numbers so the page can render the whole
+    selector, including scores, before fetching any itinerary.
+    """
+    speeds: dict[float, list[dict]] = {}
+    paces: list[dict] = []
+
+    for path in sorted(directory.glob("preset_s*.json")):
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        entry = {
+            "option": doc.get("option"),
+            "label": doc.get("option_label"),
+            "description": (doc.get("corridor_rule") or {}).get("description"),
+            "file": path.name,
+            "score": doc["totals"]["score"],
+            "trails_completed": doc["totals"]["trails_completed"],
+            "unique_miles": doc["totals"]["unique_miles"],
+            "delta_vs_free": doc.get("delta_vs_free"),
+        }
+        speeds.setdefault(float(doc["speed_mph"]), []).append(entry)
+
+    for path in sorted(directory.glob("preset_p*.json")):
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        paces.append(
+            {
+                "pace_factor": doc["pace_factor"],
+                "speed_mph": doc.get(
+                    "speed_mph",
+                    round(doc["pace_factor"] * CONFIG.tobler.base_kmh * KMH_TO_MPH, 2),
+                ),
+                "file": path.name,
+                "score": doc["totals"]["score"],
+            }
+        )
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "speeds": [
+            {
+                "mph": mph,
+                "pace_factor": round(mph / (CONFIG.tobler.base_kmh * KMH_TO_MPH), 4),
+                "options": sorted(entries, key=lambda e: e["option"] or ""),
+            }
+            for mph, entries in sorted(speeds.items())
+        ],
+        "paces": sorted(paces, key=lambda p: p["pace_factor"]),
+    }
+
+
+def write_manifest(directory: Path = WEB_DATA) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "presets.json"
+    document = manifest_dict(directory)
+    path.write_text(json.dumps(document, separators=(",", ":")), encoding="utf-8")
+    log.info(
+        "wrote %s — %d speed tiers, %d legacy paces",
+        path.name,
+        len(document["speeds"]),
+        len(document["paces"]),
+    )
+    return path
 
 
 # --------------------------------------------------------------------------------------
@@ -334,11 +498,22 @@ def write_network(net: Network, directory: Path = WEB_DATA) -> Path:
 # --------------------------------------------------------------------------------------
 
 
-def check_preset(document: dict, *, tol: float = 0.02) -> None:
+def check_preset(
+    document: dict,
+    *,
+    tol: float = 0.02,
+    net: Network | None = None,
+    route: Route | None = None,
+    rule: CorridorRule | None = None,
+) -> None:
     """Fail loudly rather than publish an itinerary whose numbers do not reconcile.
 
     A preset is a static file a reader will trust without ever running the solver, so
     every arithmetic relationship the page displays is asserted before it ships.
+
+    ``net``/``route``/``rule`` are optional so a document loaded from disk can still be
+    re-validated on its own terms; when they are supplied the corridor rule is checked
+    against the concrete walk as well as against the document's own numbers.
     """
     steps, totals = document["steps"], document["totals"]
     if not steps:
@@ -383,6 +558,71 @@ def check_preset(document: dict, *, tol: float = 0.02) -> None:
         if not step["geometry"]:
             raise ValueError(f"step {step['i']} ({step['name']}) has no geometry")
         check_turn(step)
+
+    check_corridor_rule(document, net=net, route=route, rule=rule)
+
+
+def check_corridor_rule(
+    document: dict,
+    *,
+    net: Network | None = None,
+    route: Route | None = None,
+    rule: CorridorRule | None = None,
+) -> None:
+    """An alternative must actually be the alternative it claims to be.
+
+    This is the check that gives the three options their meaning. Option b and option c
+    are *defined* by their corridor rule, and nothing else about the file distinguishes
+    them — same schema, same solver, often similar scores. If a rule-breaking route were
+    published under option c's label, the page would confidently present a route through
+    the West End as the one that skips it, and every number on it would still add up.
+
+    Two independent statements are checked, because they can disagree:
+
+    * the concrete walk honours the rule (needs ``net`` and ``route``);
+    * the corridor table published in the document agrees with the rule it declares.
+
+    The second runs on any document, including one read back off disk, so a hand-edited
+    preset cannot quietly relabel itself.
+    """
+    # A speed-tier preset is defined by its option, so it must carry the blocks that say
+    # which one it is. Only the legacy pace family may predate them.
+    if document.get("option") is not None and document["schema_version"] < SCHEMA_VERSION:
+        raise ValueError(
+            f"speed-tier preset is schema {document['schema_version']}, but the option "
+            f"blocks it needs arrived in schema {SCHEMA_VERSION}"
+        )
+
+    declared = document.get("corridor_rule") or {}
+    corridor, kind = declared.get("corridor"), declared.get("kind")
+
+    if rule is not None and net is not None and route is not None:
+        problems = rule.violations(net, route)
+        if problems:
+            raise ValueError(
+                f"route breaks its own corridor rule ({rule.label}): {'; '.join(problems)}"
+            )
+
+    if not corridor or kind is None:
+        return
+
+    rows = {row["corridor"]: row for row in document.get("corridors", [])}
+    row = rows.get(corridor)
+    if row is None:
+        raise ValueError(
+            f"preset declares a rule about {corridor!r} but publishes no corridor row for it"
+        )
+
+    if kind == "forbid" and row["unique_miles"] > 0:
+        raise ValueError(
+            f"preset claims to skip the {corridor} but reports "
+            f"{row['unique_miles']:.3f} unique miles there"
+        )
+    if kind == "require" and row["trails_completed"] != row["n_trails"]:
+        raise ValueError(
+            f"preset claims to complete the {corridor} but reports "
+            f"{row['trails_completed']} of {row['n_trails']} trails finished there"
+        )
 
 
 def check_turn(step: dict) -> None:

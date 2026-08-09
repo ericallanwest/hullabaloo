@@ -25,6 +25,9 @@ Constraints
     (5)  p_v >= z_e for both endpoints of e             -> endpoints of used edges are used
     (6)  single-commodity flow from the depot to every
          active node, carried only on traversed arcs    -> connectivity / subtour elimination
+    (7)  y_t == 1, or z_e == 0 for every e in trail t   -> optional corridor rules, which
+                                                           is how the site's alternative
+                                                           itineraries are made to differ
 
 Constraint (6) is what stops the solver from returning a lovely high-scoring loop on the
 far side of the property that never touches the start line. Flow conservation alone
@@ -88,10 +91,13 @@ def check_caps_nonbinding(
     speed`` is a hard ceiling on distance covered. If that ceiling is under 40 miles, the
     cap is unreachable and dropping it from the model changes nothing.
 
-    ``tobler`` must be the parameters the network was actually priced with. The ceiling
-    is ``base_kmh x pace_factor x budget``, so it scales with pace and crosses 40 miles
-    at a pace factor of about 1.53 — reading the ceiling off the global default while
-    solving a faster racer would silently vindicate a cap that has stopped being safe.
+    ``tobler`` must be the parameters the network was actually priced with. The ceiling is
+    ``peak speed x budget``, so it scales with pace. Stated in the units the site now
+    publishes, it crosses 40 miles at a **top speed of 5.71 mph** (40 mi / 7 h), which is
+    between the 5.5 and 6.0 mph tiers — so the four fastest of the six published speeds
+    cannot use this argument at all, and rely on the check against the answer instead.
+    Reading the ceiling off the global default while solving a faster racer would silently
+    vindicate a cap that has stopped being safe.
 
     Note the ceiling is deliberately loose: it assumes seven unbroken hours at peak
     downhill speed. A run whose ceiling exceeds the cap is not necessarily wrong, it just
@@ -127,8 +133,19 @@ def build_model(
     race: RaceParams | None = None,
     *,
     incumbent: float | None = None,
+    require_trails: frozenset[int] | None = None,
+    forbid_trails: frozenset[int] | None = None,
 ) -> tuple[pulp.LpProblem, dict]:
-    """Assemble the MILP. Returns the problem and its variable dictionaries."""
+    """Assemble the MILP. Returns the problem and its variable dictionaries.
+
+    ``require_trails`` and ``forbid_trails`` are how the published alternatives in
+    ``scripts/build_presets.py`` are made to differ: one insists a corridor is completed,
+    the other bars it outright, and the free optimum has neither. Both are expressed as
+    constraints on this model rather than by handing in a doctored network, which matters
+    for two reasons — dropping a corridor's edges can disconnect the graph, and it would
+    silently redefine ``net.trail_edges`` so that a trail with edges removed becomes
+    "completable" at reduced length and scores a point it has not earned.
+    """
     race = race or CONFIG.race
     nodes = sorted(int(n) for n in net.nodes["node_id"])
     depot = net.depot
@@ -213,8 +230,33 @@ def build_model(
     for a in net.arcs:
         prob += (g[a.arc_id] <= n_nodes * x[a.arc_id], f"flow_cap_{a.arc_id}")
 
+    # (7) corridor rules — what makes one published alternative differ from another.
+    #
+    # Requiring a trail is a constraint on y_t, not on z_e: y_t is already tied to every
+    # one of the trail's edges by (4), so pinning it to 1 pulls the whole trail in and
+    # keeps the all-or-nothing semantics the scoring rule uses.
+    for trail in sorted(require_trails or ()):
+        if trail not in y:
+            raise KeyError(f"cannot require trail {trail}: not in this network")
+        prob += (y[trail] == 1, f"require_trail_{trail}")
+
+    # Forbidding works the other way round, on z_e, because barring the *trail point*
+    # alone would still let the route walk the ground and bank the miles. Setting z_e = 0
+    # also forces every x_a on that edge to 0 through the upper half of (3), so the
+    # corridor becomes genuinely unwalkable rather than merely unscored.
+    for trail in sorted(forbid_trails or ()):
+        if trail not in net.trail_edges:
+            raise KeyError(f"cannot forbid trail {trail}: not in this network")
+        for edge in sorted(net.trail_edges[trail]):
+            prob += (z[edge] == 0, f"forbid_edge_{edge}")
+
     # Valid primal cut from the heuristic: we already *have* a route worth this much, so
     # nothing worse is interesting. This prunes hard without excluding the optimum.
+    #
+    # The caller must make sure the incumbent came from a route that satisfies the same
+    # corridor rules as this model. A score from an unconstrained solve is not a lower
+    # bound for a constrained one — this cut would then exclude the constrained optimum,
+    # or make the model infeasible outright, and either way the failure is silent.
     if incumbent is not None:
         prob += (
             pulp.lpSum(race.points_per_trail * y[t] for t in y)
@@ -265,12 +307,20 @@ def solve(
     incumbent: float | None = None,
     gap_rel: float = 0.0,
     msg: bool = True,
+    require_trails: frozenset[int] | None = None,
+    forbid_trails: frozenset[int] | None = None,
 ) -> MILPResult:
     """Solve the MILP with HiGHS and report the optimality gap."""
     import time
 
     race = race or CONFIG.race
-    prob, vars_ = build_model(net, race, incumbent=incumbent)
+    prob, vars_ = build_model(
+        net,
+        race,
+        incumbent=incumbent,
+        require_trails=require_trails,
+        forbid_trails=forbid_trails,
+    )
 
     solver = _make_solver(time_limit_s, gap_rel, msg)
     t0 = time.time()

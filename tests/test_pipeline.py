@@ -13,15 +13,22 @@ import geopandas as gpd
 import numpy as np
 import pytest
 
+from hullabaloo import corridors, webexport
 from hullabaloo.config import (
     CONFIG,
+    DEFAULT_TOP_SPEED_MPH,
     EDGES,
     EDGES_TIMED,
     M_PER_MILE,
     NODES,
     TRAILS_RAW,
 )
-from hullabaloo.tobler import profile_travel_time, tobler_speed_kmh
+from hullabaloo.tobler import (
+    pace_for_top_speed_mph,
+    profile_travel_time,
+    tobler_speed_kmh,
+    top_speed_mph,
+)
 from hullabaloo.topology import connected_components
 
 EXPECTED_TRAILS = 40
@@ -52,10 +59,10 @@ def test_tobler_flat_pace_is_plausible():
     """Bound the modelled flat pace at both ends of the pace_factor decision.
 
     The configured pace allows up to 4.5 mph, not walking speed: ``pace_factor`` is
-    deliberately 1.35 for this racer (see ``ToblerParams``), which puts the flat pace at
-    4.23 mph — a fit competitor moving with purpose over seven hours, not a stroller.
-    Unscaled Tobler must still land in ordinary walking territory, so both are checked;
-    asserting only the scaled figure would let a bad ``base_kmh`` hide inside the
+    derived from a 5.0 mph top speed for this racer (see ``ToblerParams``), which puts the
+    flat pace at 4.20 mph — a fit competitor moving with purpose over seven hours, not a
+    stroller. Unscaled Tobler must still land in ordinary walking territory, so both are
+    checked; asserting only the scaled figure would let a bad ``base_kmh`` hide inside the
     multiplier.
     """
     mph = float(tobler_speed_kmh(0.0, CONFIG.tobler)) * 0.621371
@@ -64,6 +71,39 @@ def test_tobler_flat_pace_is_plausible():
     textbook = dataclasses.replace(CONFIG.tobler, pace_factor=1.0)
     base_mph = float(tobler_speed_kmh(0.0, textbook)) * 0.621371
     assert 2.5 < base_mph < 4.0, f"unscaled Tobler {base_mph:.2f} mph is not a walking speed"
+
+
+def test_speed_and_pace_convert_exactly_both_ways():
+    """The published brand and the modelled parameter must be the same statement.
+
+    Every itinerary on the site is labelled with a top speed but solved with a pace factor.
+    If these two drift, a file called ``preset_s60a.json`` is solved for something other
+    than 6 mph and nothing downstream would notice — the route would still validate, still
+    reconcile, and still be wrong about the one thing its name promises.
+    """
+    for mph in (5.0, 5.5, 6.0, 6.5, 7.0, 7.5):
+        params = dataclasses.replace(
+            CONFIG.tobler, pace_factor=pace_for_top_speed_mph(mph)
+        )
+        assert top_speed_mph(params) == pytest.approx(mph, abs=1e-9)
+        # ...and the brand really is the peak of the curve, not a number beside it.
+        slopes = np.linspace(-0.5, 0.5, 4001)
+        fastest = float(np.max(tobler_speed_kmh(slopes, params))) * 0.621371
+        assert fastest == pytest.approx(mph, abs=1e-3)
+
+
+def test_default_pace_is_the_bottom_published_speed():
+    """The shipped default is a rung of the published ladder, not a loose constant.
+
+    Regression: the project previously shipped ``pace_factor = 1.35``, a number with no
+    stated relationship to anything a racer could name, and no preset was ever published at
+    it — the sweep stepped 1.3, 1.4 straight past the pace that priced every committed
+    artefact."""
+    assert CONFIG.tobler.pace_factor == pytest.approx(
+        pace_for_top_speed_mph(DEFAULT_TOP_SPEED_MPH)
+    )
+    assert top_speed_mph(CONFIG.tobler) == pytest.approx(DEFAULT_TOP_SPEED_MPH, abs=1e-9)
+    assert DEFAULT_TOP_SPEED_MPH in webexport.SPEED_TIERS
 
 
 def test_travel_time_is_direction_dependent_on_a_slope():
@@ -373,6 +413,90 @@ def test_graph_has_two_arcs_per_edge(net):
     assert net.n_trails == EXPECTED_TRAILS
 
 
+# --------------------------------------------------------------------------------------
+# Corridors
+# --------------------------------------------------------------------------------------
+
+
+def test_corridors_partition_the_network(net):
+    """Every trail belongs to exactly one block.
+
+    The corridor lists are frozen literals, so a re-noded or re-scraped network can add or
+    rename a trail without the lists noticing. A trail missing from every block would be
+    silently unreachable by any corridor rule — it could never be required, and forbidding
+    its block would not exclude it — which is the kind of gap that shows up as an
+    inexplicably good "skip the West End" route rather than as an error.
+    """
+    listed = set().union(*corridors.CORRIDORS.values())
+    live = {
+        str(group["name"].iloc[0])
+        for _, group in net.edges[net.edges["trail_id"].notna()].groupby("trail_id")
+    }
+
+    assert listed == live, (
+        f"unassigned trails: {sorted(live - listed)}; "
+        f"listed but not in the network: {sorted(listed - live)}"
+    )
+    assert set(corridors.CORRIDOR_ORDER) == set(corridors.CORRIDORS)
+
+    seen: set[str] = set()
+    for name, members in corridors.CORRIDORS.items():
+        overlap = seen & members
+        assert not overlap, f"{name} shares {sorted(overlap)} with an earlier corridor"
+        seen |= members
+
+
+def test_corridor_trail_ids_resolve_against_the_live_network(net):
+    """Names are the stable key; ``trail_id`` is assigned upstream and is not."""
+    total = 0
+    for name in corridors.CORRIDOR_ORDER:
+        ids = corridors.trail_ids(net, name)
+        assert len(ids) == len(corridors.CORRIDORS[name]), name
+        assert ids <= set(net.trail_edges), name
+        total += len(ids)
+    assert total == EXPECTED_TRAILS
+
+    with pytest.raises(KeyError):
+        corridors.trail_ids(net, "Nowhere")
+
+
+def test_corridor_breakdown_accounts_for_every_scored_mile(net, sample_route):
+    """The per-corridor miles must add up to the route's own unique-mile total, or the
+    sidebar's breakdown quietly disagrees with the headline figure above it."""
+    rows = corridors.breakdown(net, sample_route)
+    assert [row["corridor"] for row in rows] == list(corridors.CORRIDOR_ORDER)
+
+    summary = sample_route.evaluate()
+    assert sum(row["unique_miles"] for row in rows) == pytest.approx(
+        summary["unique_miles"], abs=0.02
+    )
+    assert sum(row["trails_completed"] for row in rows) == summary["trails_completed"]
+    assert sum(row["n_trails"] for row in rows) == EXPECTED_TRAILS
+
+
+def test_corridor_rule_detects_both_kinds_of_violation(net, sample_route):
+    """The rule must catch a route that breaks it — this is the only thing standing
+    between a mislabelled option and the page."""
+    walked = {arc.edge_id for arc in sample_route.arcs}
+    walked_trail = next(
+        tid for tid, edges in net.trail_edges.items() if edges <= walked
+    )
+    unwalked_trail = next(
+        tid for tid, edges in net.trail_edges.items() if not edges & walked
+    )
+
+    assert not corridors.CorridorRule().violations(net, sample_route)
+    assert not corridors.CorridorRule(
+        require=frozenset({walked_trail})
+    ).violations(net, sample_route)
+
+    forbidden = corridors.CorridorRule(forbid=frozenset({walked_trail}))
+    assert forbidden.violations(net, sample_route), "walking a forbidden trail must fail"
+
+    missing = corridors.CorridorRule(require=frozenset({unwalked_trail}))
+    assert missing.violations(net, sample_route), "skipping a required trail must fail"
+
+
 def test_every_trail_forms_a_walkable_chain(net):
     from hullabaloo.optimize_alns import build_trail_chains
 
@@ -664,6 +788,86 @@ def test_preset_filename_matches_the_front_end():
     assert preset_filename(1.35) == "preset_p135.json"
 
 
+def test_preset_speed_filename_matches_the_front_end():
+    """Same contract as above, for the family the racer actually uses. ``presetSpeedFile``
+    in ``docs/js/viz.js`` reimplements this in JavaScript."""
+    from hullabaloo.webexport import preset_speed_filename
+
+    assert preset_speed_filename(5.0, "a") == "preset_s50a.json"
+    assert preset_speed_filename(6.5, "b") == "preset_s65b.json"
+    assert preset_speed_filename(7.5, "c") == "preset_s75c.json"
+
+    with pytest.raises(ValueError):
+        preset_speed_filename(6.0, "d")
+
+
+def test_milp_model_carries_the_corridor_constraints(net):
+    """Assert the constraints reach the model, without paying for a full solve.
+
+    Cheap but worth pinning: ``require`` and ``forbid`` act on different variables — one on
+    the trail indicator, one on every edge indicator — and getting that backwards produces
+    a model that solves happily and means the wrong thing. Forbidding via ``y_t`` alone
+    would still let the route walk the ground and bank the miles, merely declining the
+    trail point.
+    """
+    from hullabaloo.optimize_milp import build_model
+
+    west = corridors.trail_ids(net, corridors.PIVOT_CORRIDOR)
+    west_edges = corridors.edge_ids(net, corridors.PIVOT_CORRIDOR)
+
+    free, _ = build_model(net)
+    assert not [n for n in free.constraints if n.startswith(("require_", "forbid_"))]
+
+    required, _ = build_model(net, require_trails=west)
+    assert {f"require_trail_{t}" for t in west} <= set(required.constraints)
+
+    forbidden, _ = build_model(net, forbid_trails=west)
+    assert {f"forbid_edge_{e}" for e in west_edges} <= set(forbidden.constraints)
+
+    with pytest.raises(KeyError):
+        build_model(net, require_trails=frozenset({999_999}))
+
+
+def test_check_preset_rejects_an_option_that_broke_its_own_rule(net, sample_route):
+    """A mislabelled option is the one failure mode where every number still adds up.
+
+    Option c's whole meaning is "this route does not go there". If a route that does go
+    there were published under that label, the arithmetic checks would all pass and the
+    page would present it, confidently, as the alternative that stays home.
+    """
+    from hullabaloo import webexport
+
+    walked = {arc.edge_id for arc in sample_route.arcs}
+    walked_trail = next(tid for tid, edges in net.trail_edges.items() if edges <= walked)
+    corridor = corridors.corridor_of(
+        str(net.edges.loc[net.edges["trail_id"] == walked_trail, "name"].iloc[0])
+    )
+
+    honest = webexport.preset_dict(
+        net, sample_route, pace_factor=CONFIG.tobler.pace_factor, option="a"
+    )
+    webexport.check_preset(honest)
+
+    lying = webexport.preset_dict(
+        net,
+        sample_route,
+        pace_factor=CONFIG.tobler.pace_factor,
+        option="c",
+        rule=corridors.CorridorRule(corridor=corridor, kind="forbid"),
+    )
+    with pytest.raises(ValueError, match="claims to skip"):
+        webexport.check_preset(lying)
+
+    # And the same check run against the concrete walk rather than the document.
+    with pytest.raises(ValueError, match="breaks its own corridor rule"):
+        webexport.check_preset(
+            honest,
+            net=net,
+            route=sample_route,
+            rule=corridors.CorridorRule(forbid=frozenset({walked_trail})),
+        )
+
+
 def test_cap_ceiling_scales_with_pace(net):
     """Regression: the ceiling was read off ``CONFIG.tobler`` regardless of the pace the
     network was actually priced at, so every pace reported the same answer.
@@ -729,7 +933,11 @@ def test_a_binding_scoring_cap_is_published_but_never_called_optimal():
 
 def test_published_presets_still_reconcile():
     """Guard the committed artifacts themselves: the site is static, so a stale or
-    hand-edited preset would be served to readers with nothing to catch it."""
+    hand-edited preset would be served to readers with nothing to catch it.
+
+    Both families are checked. The speed tiers are the ones a racer reads, and they are the
+    ones whose filename encodes a claim — ``preset_s60b.json`` asserts a speed and an
+    option, and nothing else in the file would contradict it if the name were wrong."""
     import json
 
     from hullabaloo import webexport
@@ -740,6 +948,53 @@ def test_published_presets_still_reconcile():
 
     for path in presets:
         document = json.loads(path.read_text(encoding="utf-8"))
-        assert document["schema_version"] == webexport.SCHEMA_VERSION, path.name
+        assert (
+            webexport.MIN_SUPPORTED_SCHEMA
+            <= document["schema_version"]
+            <= webexport.SCHEMA_VERSION
+        ), path.name
         assert path.name == webexport.preset_filename(document["pace_factor"])
         webexport.check_preset(document)
+
+    for path in sorted(webexport.WEB_DATA.glob("preset_s*.json")):
+        document = json.loads(path.read_text(encoding="utf-8"))
+        assert document["schema_version"] == webexport.SCHEMA_VERSION, path.name
+        assert path.name == webexport.preset_speed_filename(
+            document["speed_mph"], document["option"]
+        )
+        # The pace a tier was priced at must be the one its branded speed implies, or the
+        # file is labelled with a speed it was not solved for.
+        assert document["pace_factor"] == pytest.approx(
+            pace_for_top_speed_mph(document["speed_mph"]), abs=1e-3
+        ), path.name
+        webexport.check_preset(document)
+
+
+def test_published_manifest_matches_the_files_on_disk():
+    """The manifest is what the page builds its controls from, so an entry without a file
+    behind it is a control that 404s, and a file without an entry is invisible."""
+    import json
+
+    from hullabaloo import webexport
+
+    manifest_path = webexport.WEB_DATA / "presets.json"
+    if not manifest_path.exists():
+        pytest.skip("no manifest published yet")
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    listed = {
+        option["file"] for tier in manifest["speeds"] for option in tier["options"]
+    } | {entry["file"] for entry in manifest["paces"]}
+    on_disk = {
+        path.name
+        for path in webexport.WEB_DATA.glob("preset_*.json")
+    }
+    assert listed == on_disk, (
+        f"manifest and directory disagree: "
+        f"listed only {sorted(listed - on_disk)}, on disk only {sorted(on_disk - listed)}"
+    )
+
+    for tier in manifest["speeds"]:
+        assert tier["pace_factor"] == pytest.approx(
+            pace_for_top_speed_mph(tier["mph"]), abs=1e-3
+        )

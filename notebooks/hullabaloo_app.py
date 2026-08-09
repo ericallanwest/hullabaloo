@@ -88,12 +88,18 @@ def _(mo):
 
 
 @app.cell
-def _(mo):
+def _(CONFIG, mo):
     base_kmh = mo.ui.slider(3.0, 8.0, 0.1, value=6.0, label="Tobler base speed (km/h)", show_value=True)
     k = mo.ui.slider(1.0, 6.0, 0.1, value=3.5, label="Slope sensitivity k", show_value=True)
     s0 = mo.ui.slider(0.0, 0.15, 0.01, value=0.05, label="Peak-speed offset s0", show_value=True)
     off_factor = mo.ui.slider(0.2, 1.0, 0.05, value=0.60, label="Off-trail speed factor", show_value=True)
-    pace = mo.ui.slider(0.5, 1.5, 0.05, value=1.0, label="Personal pace multiplier", show_value=True)
+    # Spans the published speed range (5.0-7.5 mph is pace 1.34-2.01) and opens on the
+    # shipped default. It used to top out at 1.5 and open at 1.0, so the app could not
+    # reach the pace every committed artefact was priced at, let alone the fast tiers.
+    pace = mo.ui.slider(
+        0.5, 2.2, 0.05, value=round(CONFIG.tobler.pace_factor, 2),
+        label="Personal pace multiplier", show_value=True,
+    )
     budget_h = mo.ui.slider(2.0, 14.0, 0.5, value=7.0, label="Time budget (hours)", show_value=True)
     iterations = mo.ui.slider(20, 600, 20, value=120, label="ALNS iterations", show_value=True)
 

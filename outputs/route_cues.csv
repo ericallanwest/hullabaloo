@@ -2,63 +2,64 @@ leg,glyph,turn,turn_deg,segment,off_trail,miles,leg_min,elapsed,running_miles,ru
 1,●,start,,Start/Finish,False,0.01,0.2,0:00,0.0,0,0.0
 2,→,right,90.0,Meadowbrook Drive,False,0.03,0.4,0:00,0.0,0,0.0
 3,↑,straight,-3.0,Gateway,False,0.13,1.8,0:02,0.127,0,0.127
-4,↑,straight,-7.9,Bike Park: Black,False,0.12,2.4,0:04,0.242,1,1.242
-5,←,left,-110.0,Bike Park: Blue,False,0.15,2.2,0:06,0.391,2,2.391
-6,→,right,73.3,Bike Park: Climbing Trail,False,0.15,2.6,0:09,0.537,2,2.537
-7,↘,sharp right,157.2,Bike Park: Green,False,0.14,2.0,0:11,0.677,3,3.677
-8,↖,slight left,-36.3,Bike Park: Climbing Trail,False,0.02,0.3,0:11,0.698,4,4.698
-9,←,left,-63.0,Gateway,False,0.09,1.6,0:13,0.791,4,4.791
-10,→,right,118.3,Lower Chimney,False,0.08,1.4,0:14,0.872,4,4.872
-11,↑,straight,-5.5,Gateway,False,0.32,7.4,0:22,1.193,4,5.193
-12,↖,slight left,-52.3,Upper Chimney,False,1.15,22.1,0:44,2.346,4,6.346
-13,↙,sharp left,-146.1,Wavelength,False,0.8,12.4,0:56,3.146,5,8.146
-14,←,left,-110.6,Mineral Way,False,0.19,2.9,0:59,3.338,5,8.338
-15,↖,slight left,-53.7,Stone Cutter's Hollow Access Road,False,0.11,1.4,1:01,3.338,5,8.338
-16,→,right,88.9,Meadowbrook Drive,False,0.39,5.5,1:06,3.338,5,8.338
-17,→,right,83.4,Highway,False,0.23,4.0,1:10,3.569,5,8.569
-18,↑,straight,12.1,Pine Forest,False,0.48,8.0,1:18,4.05,6,10.05
-19,↗,slight right,46.2,Highway,False,0.2,3.3,1:21,4.135,6,10.135
-20,↘,sharp right,143.1,Ida May,False,0.67,12.4,1:34,4.785,7,11.785
-21,→,right,77.7,Turkey Trot,False,0.65,11.8,1:46,5.374,8,13.374
-22,↘,sharp right,139.7,Wilkes Wood,False,0.84,15.4,2:01,6.018,9,15.018
-23,↑,straight,-19.0,Crosscut,False,0.61,12.3,2:13,6.63,10,16.63
-24,↖,slight left,-27.6,Highway,False,0.02,0.4,2:14,6.649,10,16.649
-25,↙,sharp left,-141.2,Forest Service Road,False,0.24,4.4,2:18,6.649,10,16.649
-26,↘,sharp right,129.0,Beauty,False,1.21,20.0,2:38,7.86,11,18.86
-27,↗,slight right,22.9,Poverty Creek (upper),False,1.6,24.6,3:03,9.465,11,20.465
-28,↗,slight right,32.2,Snakeroot,False,0.07,1.1,3:04,9.538,11,20.538
-29,→,right,103.4,May Apple,False,0.75,10.6,3:14,10.29,12,22.29
-30,←,left,-73.2,Forest Service Road,False,0.39,5.7,3:20,10.29,12,22.29
-31,→,right,98.3,Queen Anne,False,0.98,16.7,3:37,11.095,13,24.095
-32,→,right,98.4,Skullcap,False,0.51,9.0,3:46,11.609,13,24.609
-33,→,right,90.4,Prickly Pear,False,0.83,15.5,4:01,12.436,14,26.436
-34,↑,straight,-17.3,Royale,False,0.74,10.6,4:12,13.176,15,28.176
-35,←,left,-74.2,Poverty Creek (upper),False,1.19,18.6,4:30,14.367,15,29.367
-36,↑,straight,1.9,Forest Service Road 808,False,0.03,0.5,4:31,14.367,15,29.367
-37,↗,slight right,32.8,Horse Nettle,False,1.46,27.2,4:58,15.823,16,31.823
-38,↑,straight,2.3,Forest Service Road / Horse Nettle,False,0.13,2.5,5:01,15.823,16,31.823
-39,↖,slight left,-26.1,Running Cedar,False,0.18,2.6,5:03,16.007,16,32.007
-40,↑,straight,-12.0,Grinder,False,0.12,1.9,5:05,16.131,16,32.131
-41,→,right,123.9,Slytherin,False,0.46,8.5,5:14,16.589,16,32.589
-42,↑,straight,-15.6,Running Cedar,False,0.63,9.0,5:23,17.159,16,33.159
-43,→,right,99.4,Old Road Bed,False,0.06,1.2,5:24,17.222,16,33.222
-44,←,left,-69.4,Slytherin,False,0.33,4.7,5:28,17.552,16,33.552
-45,↘,sharp right,138.6,Old Road Bed,False,0.2,4.3,5:33,17.753,17,34.753
-46,←,left,-104.8,Slytherin,False,0.03,0.4,5:33,17.781,18,35.781
-47,↙,sharp left,-131.0,Grinder,False,0.31,4.9,5:38,18.095,19,37.095
-48,↘,sharp right,157.6,Chasers,False,1.15,20.7,5:59,19.242,20,39.242
-49,↙,sharp left,-133.1,Running Cedar,False,0.05,0.9,6:00,19.29,21,40.29
-50,↖,slight left,-26.4,Forest Service Road / Horse Nettle,False,0.11,1.7,6:01,19.29,21,40.29
-51,↑,straight,-7.7,Horse Nettle Connector,False,0.42,6.2,6:07,19.708,22,41.708
-52,→,right,78.9,Forest Service Road / Horse Nettle,False,0.12,1.8,6:09,19.708,22,41.708
-53,←,left,-108.5,Gateway,False,0.41,7.0,6:16,20.117,22,42.117
-54,→,right,84.9,Possum Track,False,0.3,4.7,6:21,20.417,22,42.417
-55,↗,slight right,52.4,Snyder's Knob,False,0.44,7.6,6:28,20.859,23,43.859
-56,←,left,-57.7,Possum Track,False,0.37,6.2,6:35,20.93,24,44.93
-57,↗,slight right,32.5,Gateway,False,0.68,10.2,6:45,21.534,24,45.534
-58,↗,slight right,20.8,Lower Chimney,False,0.62,9.2,6:54,22.153,24,46.153
-59,↑,straight,-18.6,Gateway,False,0.05,0.7,6:55,22.202,25,47.202
-60,↘,sharp right,144.8,Lower Chimney,False,0.05,0.7,6:56,22.225,26,48.225
-61,↗,slight right,35.2,Gateway,False,0.22,3.1,6:59,22.225,26,48.225
-62,↑,straight,3.0,Meadowbrook Drive,False,0.03,0.5,6:59,22.225,26,48.225
-63,←,left,-90.0,Start/Finish,False,0.01,0.2,6:59,22.225,26,48.225
+4,←,left,-105.5,Bike Park: Climbing Trail,False,0.02,0.4,0:02,0.148,0,0.148
+5,↘,sharp right,126.5,Bike Park: Blue,False,0.15,2.7,0:05,0.296,1,1.296
+6,↙,sharp left,-157.6,Bike Park: Green,False,0.14,2.0,0:07,0.437,2,2.437
+7,↘,sharp right,163.4,Bike Park: Climbing Trail,False,0.15,2.7,0:10,0.583,3,3.583
+8,→,right,64.8,Bike Park: Black,False,0.12,1.7,0:11,0.698,4,4.698
+9,↙,sharp left,-160.5,Gateway,False,0.09,1.6,0:13,0.791,4,4.791
+10,→,right,118.3,Lower Chimney,False,0.05,0.8,0:14,0.838,4,4.838
+11,↗,slight right,28.1,Gateway,False,0.03,0.6,0:14,0.872,4,4.872
+12,↑,straight,18.6,Lower Chimney,False,0.62,11.2,0:26,1.491,4,5.491
+13,↖,slight left,-20.8,Gateway,False,0.07,1.5,0:27,1.564,4,5.564
+14,↖,slight left,-52.3,Upper Chimney,False,1.15,22.3,0:49,2.717,4,6.717
+15,↙,sharp left,-146.1,Wavelength,False,0.8,12.5,1:02,3.517,5,8.517
+16,←,left,-110.6,Mineral Way,False,0.19,2.9,1:05,3.709,5,8.709
+17,↖,slight left,-53.7,Stone Cutter's Hollow Access Road,False,0.11,1.4,1:06,3.709,5,8.709
+18,→,right,88.9,Meadowbrook Drive,False,0.39,5.5,1:12,3.709,5,8.709
+19,→,right,83.4,Highway,False,0.11,2.2,1:14,3.823,5,8.823
+20,↘,sharp right,134.3,Pine Forest,False,0.48,8.2,1:22,4.304,6,10.304
+21,↘,sharp right,131.7,Highway,False,0.08,1.5,1:24,4.388,6,10.388
+22,↘,sharp right,143.1,Ida May,False,0.67,12.5,1:36,5.039,7,12.039
+23,→,right,77.7,Turkey Trot,False,0.65,11.9,1:48,5.628,8,13.628
+24,↘,sharp right,139.7,Wilkes Wood,False,0.84,15.5,2:03,6.272,9,15.272
+25,↑,straight,-19.0,Crosscut,False,0.61,12.4,2:16,6.884,10,16.884
+26,↖,slight left,-27.6,Highway,False,0.02,0.4,2:16,6.903,10,16.903
+27,↙,sharp left,-141.2,Forest Service Road,False,0.24,4.4,2:21,6.903,10,16.903
+28,↘,sharp right,129.0,Beauty,False,1.21,20.1,2:41,8.114,11,19.114
+29,↗,slight right,22.9,Poverty Creek (upper),False,1.6,24.7,3:05,9.719,11,20.719
+30,↗,slight right,32.2,Snakeroot,False,0.07,1.1,3:07,9.792,11,20.792
+31,→,right,103.4,May Apple,False,0.75,10.6,3:17,10.544,12,22.544
+32,←,left,-73.2,Forest Service Road,False,0.39,5.7,3:23,10.544,12,22.544
+33,→,right,98.3,Queen Anne,False,0.98,16.8,3:40,11.349,13,24.349
+34,→,right,98.4,Skullcap,False,0.51,9.0,3:49,11.863,13,24.863
+35,→,right,90.4,Prickly Pear,False,0.83,15.6,4:04,12.69,14,26.69
+36,↑,straight,-17.3,Royale,False,0.74,10.7,4:15,13.43,15,28.43
+37,←,left,-74.2,Poverty Creek (upper),False,1.19,18.7,4:34,14.621,15,29.621
+38,↑,straight,1.9,Forest Service Road 808,False,0.03,0.5,4:34,14.621,15,29.621
+39,↗,slight right,32.8,Horse Nettle,False,1.46,27.4,5:02,16.077,16,32.077
+40,↑,straight,2.3,Forest Service Road / Horse Nettle,False,0.13,2.6,5:04,16.077,16,32.077
+41,↖,slight left,-26.1,Running Cedar,False,0.81,13.0,5:17,16.831,16,32.831
+42,↑,straight,15.6,Slytherin,False,0.46,6.7,5:24,17.289,16,33.289
+43,←,left,-123.9,Grinder,False,0.12,2.4,5:26,17.413,16,33.413
+44,↘,sharp right,130.9,Old Road Bed,False,0.06,1.2,5:27,17.476,16,33.476
+45,←,left,-69.4,Slytherin,False,0.33,4.8,5:32,17.806,16,33.806
+46,↘,sharp right,138.6,Old Road Bed,False,0.2,4.3,5:37,18.007,17,35.007
+47,←,left,-104.8,Slytherin,False,0.03,0.4,5:37,18.035,18,36.035
+48,↙,sharp left,-131.0,Grinder,False,0.31,4.9,5:42,18.349,19,37.349
+49,↘,sharp right,157.6,Chasers,False,1.15,20.8,6:03,19.496,20,39.496
+50,↙,sharp left,-133.1,Running Cedar,False,0.05,0.9,6:04,19.544,21,40.544
+51,↖,slight left,-26.4,Forest Service Road / Horse Nettle,False,0.11,1.7,6:05,19.544,21,40.544
+52,↑,straight,-7.7,Horse Nettle Connector,False,0.42,6.2,6:11,19.962,22,41.962
+53,→,right,78.9,Forest Service Road / Horse Nettle,False,0.12,1.8,6:13,19.962,22,41.962
+54,←,left,-108.5,Gateway,False,0.41,7.1,6:20,20.371,22,42.371
+55,→,right,84.9,Possum Track,False,0.37,5.7,6:26,20.742,23,43.742
+56,→,right,57.7,Snyder's Knob,False,0.44,8.0,6:34,21.184,24,45.184
+57,↖,slight left,-52.4,Possum Track,False,0.3,4.8,6:39,21.184,24,45.184
+58,↗,slight right,32.5,Gateway,False,0.92,14.7,6:54,22.035,24,46.035
+59,↑,straight,5.5,Lower Chimney,False,0.03,0.4,6:54,22.069,24,46.069
+60,↑,straight,5.7,Gateway,False,0.02,0.2,6:54,22.085,25,47.085
+61,↘,sharp right,144.8,Lower Chimney,False,0.05,0.7,6:55,22.108,26,48.108
+62,↙,sharp left,-144.8,Gateway,False,0.25,3.7,6:59,22.108,26,48.108
+63,↑,straight,3.0,Meadowbrook Drive,False,0.03,0.6,6:59,22.108,26,48.108
+64,←,left,-90.0,Start/Finish,False,0.01,0.2,6:59,22.108,26,48.108

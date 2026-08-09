@@ -5,7 +5,7 @@
       "k": 3.5,
       "s0": 0.05,
       "off_trail_factor": 0.6,
-      "pace_factor": 1.35,
+      "pace_factor": 1.3411204149104694,
       "min_speed_kmh": 0.15
     },
     "topology": {
@@ -28,23 +28,23 @@
     }
   },
   "coverage_bound": {
-    "cover_all_lower_bound_h": 10.57,
+    "cover_all_lower_bound_h": 10.64,
     "budget_h": 7.0,
-    "fraction_of_network_reachable": 0.662,
+    "fraction_of_network_reachable": 0.658,
     "total_network_miles": 40.16,
     "max_possible_score": 80.0
   },
   "baseline_greedy": {
-    "score": 42.152,
-    "unique_miles": 19.152,
+    "score": 42.067,
+    "unique_miles": 19.067,
     "trails_completed": 23,
-    "walked_miles": 24.81,
+    "walked_miles": 24.64,
     "offtrail_miles": 0.0,
-    "repeat_miles": 5.66,
-    "time_h": 6.98,
+    "repeat_miles": 5.58,
+    "time_h": 6.995,
     "time_budget_h": 7.0,
     "feasible": true,
-    "n_arcs": 86
+    "n_arcs": 84
   },
   "baseline_best_ratio": {
     "score": 37.014,
@@ -53,27 +53,27 @@
     "walked_miles": 21.64,
     "offtrail_miles": 0.0,
     "repeat_miles": 4.62,
-    "time_h": 6.168,
+    "time_h": 6.208,
     "time_budget_h": 7.0,
     "feasible": true,
     "n_arcs": 98
   },
   "alns": {
-    "score": 47.889,
-    "unique_miles": 21.889,
+    "score": 47.603,
+    "unique_miles": 21.603,
     "trails_completed": 26,
-    "walked_miles": 24.74,
+    "walked_miles": 24.59,
     "offtrail_miles": 0.0,
-    "repeat_miles": 2.85,
-    "time_h": 7.0,
+    "repeat_miles": 2.99,
+    "time_h": 6.961,
     "time_budget_h": 7.0,
     "feasible": true,
-    "n_arcs": 84
+    "n_arcs": 86
   },
   "alns_order": [
+    45,
     44,
     43,
-    45,
     39,
     1,
     12,
@@ -83,7 +83,9 @@
     24,
     2,
     17,
-    11,
+    8,
+    29,
+    13,
     15,
     21,
     18,
@@ -93,8 +95,8 @@
   "route_validation": "OK",
   "caps": {
     "total_network_miles": 40.16,
-    "peak_speed_mph": 5.03,
-    "distance_ceiling_mi": 35.23,
+    "peak_speed_mph": 5.0,
+    "distance_ceiling_mi": 35.0,
     "mile_cap": 40.0,
     "mile_cap_reachable": false,
     "n_trails": 40,
@@ -104,45 +106,45 @@
   },
   "milp": {
     "status": "Optimal",
-    "incumbent": 48.225,
-    "upper_bound": 48.225,
+    "incumbent": 48.108,
+    "upper_bound": 48.108,
     "gap_pct": 0.0,
     "trails_completed": 26,
-    "solve_seconds": 63.9
+    "solve_seconds": 44.9
   },
-  "alns_gap_vs_milp_bound_pct": 0.7,
+  "alns_gap_vs_milp_bound_pct": 1.06,
   "milp_route_validation": "OK",
   "milp_route": {
-    "score": 48.225,
-    "unique_miles": 22.225,
+    "score": 48.108,
+    "unique_miles": 22.108,
     "trails_completed": 26,
-    "walked_miles": 25.07,
+    "walked_miles": 24.87,
     "offtrail_miles": 0.0,
-    "repeat_miles": 2.85,
-    "time_h": 6.997,
+    "repeat_miles": 2.76,
+    "time_h": 6.999,
     "time_budget_h": 7.0,
     "feasible": true,
     "n_arcs": 99
   },
   "final_route_source": "milp",
   "final_route": {
-    "score": 48.225,
-    "unique_miles": 22.225,
+    "score": 48.108,
+    "unique_miles": 22.108,
     "trails_completed": 26,
-    "walked_miles": 25.07,
+    "walked_miles": 24.87,
     "offtrail_miles": 0.0,
-    "repeat_miles": 2.85,
-    "time_h": 6.997,
+    "repeat_miles": 2.76,
+    "time_h": 6.999,
     "time_budget_h": 7.0,
     "feasible": true,
     "n_arcs": 99
   },
-  "elapsed_s": 1121.8,
+  "elapsed_s": 1157.9,
   "outputs": {
-    "geopackage": "C:\\Users\\Eric\\Desktop\\Ideas\\Hullabaloo\\outputs\\hullabaloo.gpkg",
-    "map": "C:\\Users\\Eric\\Desktop\\Ideas\\Hullabaloo\\outputs\\route_map.png",
-    "gpx": "C:\\Users\\Eric\\Desktop\\Ideas\\Hullabaloo\\outputs\\route.gpx",
-    "cues": "C:\\Users\\Eric\\Desktop\\Ideas\\Hullabaloo\\outputs\\route_cues.csv",
-    "interactive_map": "C:\\Users\\Eric\\Desktop\\Ideas\\Hullabaloo\\outputs\\route_map.html"
+    "geopackage": "C:\\Users\\Eric\\Desktop\\Ideas\\Hullabaloo\\.claude\\worktrees\\speed-branded-itineraries\\outputs\\hullabaloo.gpkg",
+    "map": "C:\\Users\\Eric\\Desktop\\Ideas\\Hullabaloo\\.claude\\worktrees\\speed-branded-itineraries\\outputs\\route_map.png",
+    "gpx": "C:\\Users\\Eric\\Desktop\\Ideas\\Hullabaloo\\.claude\\worktrees\\speed-branded-itineraries\\outputs\\route.gpx",
+    "cues": "C:\\Users\\Eric\\Desktop\\Ideas\\Hullabaloo\\.claude\\worktrees\\speed-branded-itineraries\\outputs\\route_cues.csv",
+    "interactive_map": "C:\\Users\\Eric\\Desktop\\Ideas\\Hullabaloo\\.claude\\worktrees\\speed-branded-itineraries\\outputs\\route_map.html"
   }
 }
