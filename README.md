@@ -12,7 +12,7 @@ You get 7 hours. You score two ways, each capped at 40 points:
 Covering the entire network would score a perfect 80. It would also take **10.6 hours** at
 the shipped pace — and that is a lower bound that walks every edge in its cheaper direction
 and ignores all the backtracking a real closed loop forces. With 7 hours the best possible
-is 48.23, or **60% of a perfect score**, covering 22.2 of the 40.16 miles. The whole game is
+is 48.11, or **60% of a perfect score**, covering 22.1 of the 40.16 miles. The whole game is
 deciding *which* miles. That makes this a **prize-collecting arc routing problem**: points
 sit on edges rather than nodes, re-walking an edge earns nothing the second time, and the
 tour must start and finish at the trailhead.
@@ -23,32 +23,32 @@ tour must start and finish at the trailhead.
 
 | | score | trails | unique miles | time |
 |---|---|---|---|---|
-| greedy nearest-trail baseline | 42.15 | 23 | 19.15 | 6.98 h |
-| greedy best-ratio baseline | 37.01 | 20 | 17.01 | 6.17 h |
-| ALNS (6 seeds × 500 iterations) | 47.89 | 26 | 21.89 | 7.00 h |
-| **MILP — proven optimal** | **48.23** | **26** | **22.23** | **7.00 h** |
+| greedy nearest-trail baseline | 42.07 | 23 | 19.07 | 7.00 h |
+| greedy best-ratio baseline | 37.01 | 20 | 17.01 | 6.21 h |
+| ALNS (6 seeds × 500 iterations) | 47.60 | 26 | 21.60 | 6.96 h |
+| **MILP — proven optimal** | **48.11** | **26** | **22.11** | **7.00 h** |
 
 **The problem is solved to proven global optimality.** HiGHS closed the gap to 0.00% in
-about a minute: no 7-hour route scores better than **48.23**, and the route uses the full
-budget to the second.
+45 seconds: no 7-hour route scores better than **48.11** at the shipped 5.0 mph, and the
+route uses the full budget to the second.
 
 That is a **14% improvement** over a sensible greedy baseline — a much narrower margin than
 this project reported before the forest roads went in, and the narrowing is real rather than
-a regression. Roads help the greedy walker too: the baseline climbed from 26.42 to 42.15
+a regression. Roads help the greedy walker too: the baseline climbed from 26.42 to 42.07
 once it could move between trail clusters at full speed. An optimizer's advantage is largest
 on a network where the obvious move is often wrong, and the roads made a lot of obvious
 moves right.
 
-The heuristic is not wasted — it reached 47.889, **within 0.7%** of the optimum, in a few
+The heuristic is not wasted — it reached 47.603, **within 1.1%** of the optimum, in a few
 minutes, and its incumbent is fed to the solver as a valid primal cut that prunes the search
-hard. All six seeds landed between 46.19 and 47.89, so the search finds the right basin
+hard. All six seeds landed between 46.23 and 47.60, so the search finds the right basin
 reliably rather than getting lucky on one of them.
 
-Worth noting how the heuristic gets there: its solution encoding *targets* only 18 trails,
-yet the decoded route *completes* 26. The extra eight are collected for free on deadhead legs
+Worth noting how the heuristic gets there: its solution encoding *targets* only 20 trails,
+yet the decoded route *completes* 26. The extra six are collected for free on deadhead legs
 between targets — which is exactly why the evaluator credits every edge the walk touches
 rather than only the ones it set out to collect. Scoring solely the targeted trails would
-have thrown away eight points.
+have thrown away six points.
 
 See [`outputs/run_report.json`](outputs/run_report.json) for the exact figures.
 
@@ -87,11 +87,45 @@ of an arc is mostly that displacement. **⬇ Download CSV** hands the whole thin
 summary block at the top, then a line per leg carrying the turn, the distance, the clock and
 the running score.
 
-The left-hand **pace factor** control switches between eleven pre-solved itineraries,
-from 1.0 (textbook Tobler) to 2.0. Pace is
-the one parameter a racer can neither measure in advance nor control on the day: Tobler's
-constants describe unhurried walking, and how much quicker a fit competitor actually moves
-is a guess. Sweeping it shows how much the plan depends on that guess.
+The left-hand controls pick from eighteen pre-solved itineraries: six **top speeds** from
+5.0 to 7.5 mph, and at each speed three **plans** that differ in what they are willing to
+commit to.
+
+Speed is branded in mph rather than as a multiplier because a multiplier is not something a
+racer can feel. The number quoted is the peak of Tobler's curve, reached on a gentle
+downhill; flat ground runs about 16% slower, so the 6.0 mph tier is a 11:54 flat mile. The
+`pace_factor` underneath is derived from it exactly — at the peak gradient the exponential
+term is 1, so peak speed is just `base_kmh x pace_factor` and the two convert without
+fitting anything.
+
+The three plans at each speed exist because the network poses one genuinely open question:
+whether to go west. The **West End** — Poverty Creek (lower), Skullcap, Trillium, Beauty and
+neighbours, 8.3 miles of trail — sits four to five km from the start line, so reaching it
+costs a long out-and-back. Plan **a** is the unconstrained optimum. Plan **b** insists the
+West End is completed; plan **c** forbids it outright.
+
+The point of publishing all three is that **the right answer flips inside the published
+range**. Each plan is solved to proven optimality under its own rule, and the cost of each
+constraint moves monotonically and in opposite directions:
+
+| top speed | a — best | b — commit | c — skip | cost of b | cost of c | cheaper |
+|---|---|---|---|---|---|---|
+| 5.0 mph | 48.11 | 42.20 | 45.98 | −5.91 | −2.13 | skip |
+| 5.5 | 52.48 | 47.64 | 49.52 | −4.84 | −2.96 | skip |
+| 6.0 | 56.00 | 52.48 | 52.70 | −3.52 | −3.30 | skip |
+| **6.5** | 59.68 | 56.23 | 54.93 | **−3.45** | **−4.76** | **commit** |
+| 7.0 | 62.80 | 60.29 | 57.55 | −2.51 | −5.25 | commit |
+| 7.5 | 65.66 | 64.14 | 60.13 | −1.52 | −5.54 | commit |
+
+Below about 6.2 mph the long haul west is not worth its out-and-back and skipping is the
+cheaper compromise; above it, the West End's 8.3 miles are reachable cheaply enough that
+*not* going is the expensive choice. A racer whose speed sits near that crossover is exactly
+the racer a single itinerary would serve worst, which is the argument for the grid.
+
+Folded away below them is the older **pace sweep**, eleven itineraries from 1.0 (textbook
+Tobler) to 2.0. It answers a modelling question rather than a racing one: pace is the one
+parameter a racer can neither measure in advance nor control on the day, and sweeping it
+shows how much the plan depends on that guess.
 
 Underneath sits the printed **tanZnavigation Pandapas Pond sheet**, georeferenced on
 MapWarper and faded in over any of nine basemaps. It is the map racers actually carry, so it
@@ -109,7 +143,7 @@ same size scan covers about a quarter of the ground.
 Each itinerary is solved independently and shipped as JSON:
 
 ```bash
-pixi run presets              # solve every pace factor, write docs/data/
+pixi run presets              # solve all 18 speed-tier itineraries, write docs/data/
 python -m http.server -d docs # then open http://localhost:8000
 ```
 
@@ -133,11 +167,12 @@ wrong while every number around it still adds up.
 Scoring is `min(trails, 40) + min(unique_miles, 40)`, but a minimum is not linear, so the
 MILP maximizes the *uncapped* sum. That substitution is free only while neither cap binds,
 and the usual argument for it is a speed limit: nobody beats Tobler's peak, so
-`peak_speed x 7 h` bounds the distance covered. At the shipped pace of 1.35 that ceiling is
-35.2 miles, comfortably under the 40-mile cap.
+`peak_speed x 7 h` bounds the distance covered. At the shipped speed of 5.0 mph that ceiling
+is 35.0 miles, comfortably under the 40-mile cap.
 
-The ceiling scales with pace, and it crosses 40 miles at a pace factor of **1.53** — so
-the a-priori argument simply expires partway up the sweep. Past that the case has to be
+The ceiling is just `top speed x 7 h`, so it crosses 40 miles at **5.71 mph** — between the
+5.5 and 6.0 mph tiers. The a-priori argument therefore expires two rungs up the published
+ladder, and the four fastest tiers cannot use it at all. Past that the case has to be
 made on the answer instead, which is easy: the uncapped objective `U` dominates the true
 score `S` everywhere, so if the returned optimum uses under 40 miles and under 40 trails
 then `S = U` there, and `S(x) <= U(x) <= U(x*) = S(x*)` for every other route. The optimum
@@ -166,7 +201,7 @@ cp .env.example .env          # then set TNT_USER / TNT_PASS
 
 pixi run pipeline             # end to end; skips stages whose output exists
 pixi run pipeline-bounded     # also spends 10 min proving an optimality bound
-pixi run presets              # solve one itinerary per pace factor for the web viz
+pixi run presets              # solve the 18 published itineraries for the web viz
 pixi run test                 # 34 tests
 pixi run app                  # interactive marimo app
 ```
@@ -231,11 +266,11 @@ as a replacement for the official geometry.
 After noding, the 40 trails form **three components** separated by genuine 285–700 m gaps
 that no snapping will ever close:
 
-| component | trails | miles |
-|---|---|---|
-| main | 28 | 30.8 |
-| north | 7 | 5.8 |
-| west | 5 | 3.5 |
+| component | trails | miles | centroid | where |
+|---|---|---|---|---|
+| main | 28 | 30.9 | 37.264, −80.495 | the spine, running the Poverty Creek valley |
+| south | 7 | 5.8 | 37.245, −80.483 | Highway, Turkey Trot, Blunderbuss and neighbours |
+| east | 5 | 3.5 | 37.268, −80.461 | Slytherin, Grinder, Chasers, Running Cedar |
 
 My first instinct was to bridge them by bushwhacking, and I built a whole least-cost
 off-trail model to do it. That was solving the wrong problem — twice over, as it turned
@@ -402,9 +437,26 @@ graph must be directed — the optimizer can and does exploit which way round to
 Time is integrated segment by segment along each profile, since Tobler is convex in |slope|
 and averaging grade over a whole trail badly underestimates rolling terrain.
 
-Defaults imply **3.13 mph on the flat** (19.2 min/mile). These are literature constants,
-**not** calibrated to a specific person carrying a pack for seven hours — `pace_factor`
-exists for that.
+Unscaled, the defaults imply **3.13 mph on the flat** (19.2 min/mile) and a 3.73 mph peak.
+These are literature constants, **not** calibrated to a specific person racing for seven
+hours — `pace_factor` exists for that, and is set by naming a top speed rather than by
+picking a multiplier:
+
+```
+pace_factor = top_speed_mph / (base_kmh * 0.621371)      # = mph / 3.728
+```
+
+| top speed | pace_factor | flat mph | flat min/mile |
+|-----------|-------------|----------|---------------|
+| 5.0 mph   | 1.341       | 4.20     | 14:18         |
+| 5.5       | 1.475       | 4.62     | 12:59         |
+| 6.0       | 1.609       | 5.04     | 11:54         |
+| 6.5       | 1.743       | 5.46     | 10:59         |
+| 7.0       | 1.878       | 5.88     | 10:12         |
+| 7.5       | 2.012       | 6.30     | 9:31          |
+
+The shipped default is the bottom rung, 5.0 mph. Everything committed to the repository —
+the timed edge table, `run_report.json`, every figure quoted above — is priced at it.
 
 ### Validating against published gains
 
@@ -446,14 +498,14 @@ src/hullabaloo/
   webexport.py     itinerary + network JSON for the web planner
   pipeline.py      end-to-end runner
 scripts/
-  build_presets.py solve one itinerary per pace factor
+  build_presets.py solve the published itineraries (6 speeds x 3 plans)
 notebooks/         marimo (.py, git-diffable)
 docs/              static route planner, served by GitHub Pages
   index.html       panes, controls
   css/style.css    light + dark theme
   js/viz.js        Leaflet rendering, step state, CSV download
   icons/           NPS self-guiding-trail mark, used as the favicon
-  data/            network.json + one preset per pace factor
+  data/            network.json + presets.json manifest + one file per itinerary
 tests/             34 tests
 ```
 

@@ -32,12 +32,22 @@ from __future__ import annotations
 import logging
 import math
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .config import CONFIG, RaceParams
+from .corridors import CorridorRule
 from .graph import Arc, Network, Route, score_edges
 
 log = logging.getLogger(__name__)
+
+#: Score charged per corridor-rule violation.
+#:
+#: Large enough to dominate any real gain — the whole network is only 80 points — so a
+#: rule-breaking route can never out-score a compliant one. Finite rather than infinite on
+#: purpose: it leaves a gradient, so a search that starts outside the feasible region can
+#: still tell "six violations" from "one" and climb back in. With -inf every infeasible
+#: neighbour looks equally bad and the search random-walks until it gets lucky.
+RULE_PENALTY = 1000.0
 
 
 # --------------------------------------------------------------------------------------
@@ -233,9 +243,21 @@ def _order_from_route(route: Route, chains: dict[int, TrailChain]) -> list[int]:
 class ALNSResult:
     route: Route
     order: list[int]
+    #: Search score: the race score less any corridor-rule penalty. This is the number the
+    #: annealing compared, so it is the number to compare two runs on — but it is *not* the
+    #: score the route earns, and must never be published or handed to the MILP as an
+    #: incumbent without checking ``violations`` first.
     score: float
     history: list[tuple[int, float]]
     iterations: int
+    #: Race score as actually earned, ignoring the rule.
+    raw_score: float = 0.0
+    #: Empty when the route honours the rule it was searched under.
+    violations: list[str] = field(default_factory=list)
+
+    @property
+    def obeys_rule(self) -> bool:
+        return not self.violations
 
 
 class ALNS:
@@ -247,11 +269,22 @@ class ALNS:
         chains: dict[int, TrailChain] | None = None,
         race: RaceParams | None = None,
         seed: int = 0,
+        rule: CorridorRule | None = None,
     ) -> None:
         self.net = net
-        self.chains = chains if chains is not None else build_trail_chains(net)
         self.race = race or CONFIG.race
         self.rng = random.Random(seed)
+        self.rule = rule or CorridorRule()
+
+        chains = chains if chains is not None else build_trail_chains(net)
+        # A forbidden trail is removed from the candidate pool outright, so the search
+        # never spends an iteration proposing something it cannot keep. That alone is not
+        # sufficient — the decoder's deadhead paths can still wander onto forbidden ground,
+        # and the evaluator credits every edge the walk touches — so `_score` also
+        # penalizes violations. Filtering is the cheap half; the penalty is the correct half.
+        self.chains = {
+            tid: chain for tid, chain in chains.items() if tid not in self.rule.forbid
+        }
         self.all_trails = list(self.chains)
 
         self.destroy_ops = [
@@ -268,6 +301,25 @@ class ALNS:
         self.destroy_weights = [1.0] * len(self.destroy_ops)
         self.repair_weights = [1.0] * len(self.repair_ops)
 
+    # -- scoring -----------------------------------------------------------------------
+
+    def _score(self, order: list[int]) -> float:
+        """Decode a visit order and score it, net of any corridor-rule penalty.
+
+        Every operator and the acceptance test go through here, so the rule is applied
+        once, in one place, and cannot be forgotten by a code path that scores a candidate
+        its own way.
+        """
+        route = decode(order, self.net, self.chains, self.race)
+        score = evaluate(route)
+        if self.rule.is_free:
+            return score
+        return score - RULE_PENALTY * self.rule.violation_count(self.net, route)
+
+    def decode_order(self, order: list[int]) -> Route:
+        """The concrete walk an order expands to. Public so callers can re-check the rule."""
+        return decode(order, self.net, self.chains, self.race)
+
     # -- destroy -----------------------------------------------------------------------
 
     def _destroy_random(self, order: list[int], k: int) -> list[int]:
@@ -280,7 +332,7 @@ class ALNS:
         """Drop the trails giving the least score per second of detour."""
         if len(order) <= 1:
             return order[:]
-        base = evaluate(decode(order, self.net, self.chains, self.race))
+        base = self._score(order)
         base_time = decode(order, self.net, self.chains, self.race).time_s
         ratios = []
         for trail_id in order:
@@ -320,7 +372,7 @@ class ALNS:
         positions = range(len(order) + 1)
         for pos in positions:
             candidate = order[:pos] + [trail_id] + order[pos:]
-            score = evaluate(decode(candidate, self.net, self.chains, self.race))
+            score = self._score(candidate)
             if score > best_score:
                 best_score, best_order = score, candidate
         return best_score, best_order or order
@@ -332,7 +384,7 @@ class ALNS:
         improved = True
         while improved and missing:
             improved = False
-            base = evaluate(decode(current, self.net, self.chains, self.race))
+            base = self._score(current)
             best = (base, None, None)
             for trail_id in missing:
                 score, candidate = self._insertion_best(current, trail_id)
@@ -349,12 +401,12 @@ class ALNS:
         current = order[:]
         missing = [t for t in self.all_trails if t not in set(current)]
         while missing:
-            base = evaluate(decode(current, self.net, self.chains, self.race))
+            base = self._score(current)
             scored = []
             for trail_id in missing:
                 candidates = sorted(
                     (
-                        evaluate(decode(current[:p] + [trail_id] + current[p:], self.net, self.chains, self.race))
+                        self._score(current[:p] + [trail_id] + current[p:])
                         for p in range(len(current) + 1)
                     ),
                     reverse=True,
@@ -377,9 +429,7 @@ class ALNS:
         for trail_id in missing[: self.rng.randint(1, 5)]:
             pos = self.rng.randrange(len(current) + 1)
             candidate = current[:pos] + [trail_id] + current[pos:]
-            if evaluate(decode(candidate, self.net, self.chains, self.race)) >= evaluate(
-                decode(current, self.net, self.chains, self.race)
-            ):
+            if self._score(candidate) >= self._score(current):
                 current = candidate
         return current
 
@@ -413,9 +463,20 @@ class ALNS:
                     candidates.append(order)
             except Exception:  # noqa: BLE001 - a failed construction is not fatal
                 continue
-        return max(
-            candidates, key=lambda o: evaluate(decode(o, self.net, self.chains, self.race))
-        )
+
+        # Under a "require" rule, add a variant of each construction that visits the
+        # required trails first. None of the constructors know about the rule, so left to
+        # themselves they tend to start entirely infeasible — and a required corridor is
+        # usually the far one, which is exactly what a budget-truncating decoder drops.
+        # Front-loading it is the one placement that reliably survives truncation, and it
+        # gives the search a feasible solution to improve rather than one to repair.
+        if self.rule.require:
+            required = [t for t in self.rule.require if t in self.chains]
+            for order in list(candidates):
+                rest = [t for t in order if t not in self.rule.require]
+                candidates.append(required + rest)
+
+        return max(candidates, key=self._score)
 
     def solve(
         self,
@@ -426,7 +487,7 @@ class ALNS:
         seed_order: list[int] | None = None,
     ) -> ALNSResult:
         current = seed_order[:] if seed_order else self._best_start()
-        current_score = evaluate(decode(current, self.net, self.chains, self.race))
+        current_score = self._score(current)
         best, best_score = current[:], current_score
 
         temp = initial_temp
@@ -438,7 +499,7 @@ class ALNS:
             k = self.rng.randint(1, max(2, len(current) // 3))
 
             candidate = self.repair_ops[r_idx](self.destroy_ops[d_idx](current, k))
-            cand_score = evaluate(decode(candidate, self.net, self.chains, self.race))
+            cand_score = self._score(candidate)
 
             reward = 0.0
             if cand_score > best_score + 1e-9:
@@ -465,7 +526,13 @@ class ALNS:
         route = decode(best, self.net, self.chains, self.race)
         history.append((iterations, best_score))
         return ALNSResult(
-            route=route, order=best, score=best_score, history=history, iterations=iterations
+            route=route,
+            order=best,
+            score=best_score,
+            history=history,
+            iterations=iterations,
+            raw_score=evaluate(route),
+            violations=self.rule.violations(self.net, route),
         )
 
 

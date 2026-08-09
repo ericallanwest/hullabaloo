@@ -10,6 +10,7 @@
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const NETWORK_URL = 'data/network.json';
+const MANIFEST_URL = 'data/presets.json';
 
 // The Pandapas Pond trail map, georeferenced on MapWarper (mapwarper.net/maps/110238).
 // Set to null to drop the layer entirely — the Trail Map slider then hides itself and
@@ -142,6 +143,15 @@ let NETWORK = null;     // network.json, loaded once
 let PRESET = null;      // the itinerary currently displayed
 let currentStep = 1;
 let stepPlayTimer = null;
+
+// Module scope rather than inside the DOM-ready handler: the preset controls are built
+// from the manifest by top-level functions, and every one of them has to be able to halt
+// playback before swapping the itinerary out from under it.
+function stopPlaying() {
+  if (stepPlayTimer) { clearInterval(stepPlayTimer); stepPlayTimer = null; }
+  const btn = $('btnStepPlay');
+  if (btn) btn.textContent = '▶ Play';
+}
 let startMarker = null;
 let homeBounds = null;
 
@@ -414,19 +424,58 @@ function renderPresetInfo() {
   // Presets predating the optimality block fall back to the raw solver gap.
   const opt = PRESET.optimality || { caps_binding: [], proven: solver.gap_pct === 0, note: null };
 
+  // The optimality claim has to be scoped to the constraint it was proved under. "No
+  // better route exists" is true of option a; for the constrained plans it is only true
+  // among routes obeying their rule, and stating it unqualified would claim far too much.
+  const constrained = !!(PRESET.corridor_rule || {}).corridor;
+  const within = constrained ? ' among routes obeying this constraint' : '';
+  // The legacy family is indexed by pace, not speed, and says so.
+  const axis = PRESET.speed_mph != null ? 'speed' : 'pace';
+
   let claim;
   if (opt.caps_binding.length) claim = '';   // the caveat below says it instead
-  else if (opt.proven) claim = ' Proven optimal by the MILP — no better route exists at this pace.';
-  else if (solver.gap_pct != null) claim = ` Within ${solver.gap_pct.toFixed(1)}% of a proven upper bound.`;
+  else if (opt.proven) claim = ` Proven optimal by the MILP — no better route exists at this ${axis}${within}.`;
+  else if (solver.gap_pct != null) claim = ` Within ${solver.gap_pct.toFixed(1)}% of a proven upper bound${within}.`;
   else claim = '';
 
+  // What this plan gave up to be what it is. Stated in points against the free optimum at
+  // the same speed, which is the only comparison that isolates the cost of the rule —
+  // comparing across speeds would fold in how fast the racer is.
+  const rule = PRESET.corridor_rule || {};
+  const cost = PRESET.delta_vs_free;
+  const ruleBlock = !rule.corridor ? '' :
+    `<div class="info-rule"><b>${esc(PRESET.option_label || '')}</b>` +
+    `<br><span class="info-note">${esc(rule.description || '')}</span>` +
+    (cost == null ? '' :
+      `<br><span class="info-note">Costs <b>${Math.abs(cost).toFixed(2)}</b> points ` +
+      `against the best available plan at this speed.</span>`) +
+    `</div>`;
+
+  // Where the miles actually went. A corridor the route never enters keeps its row, at
+  // zero — for the two constrained plans the empty row *is* the point.
+  const rows = PRESET.corridors || [];
+  const corridorBlock = !rows.length ? '' :
+    `<div class="info-sub">Where the miles go</div>` +
+    rows.map(r =>
+      `<div class="info-row"><span>${esc(r.corridor)}</span>` +
+      `<span><b>${r.unique_miles.toFixed(1)}</b>` +
+      `<span class="info-note"> / ${r.total_miles.toFixed(1)} mi · ` +
+      `${r.trails_completed}/${r.n_trails}</span></span></div>`).join('');
+
+  const speed = PRESET.speed_mph != null
+    ? `<div class="info-row"><span>Top speed</span><span><b>${PRESET.speed_mph.toFixed(1)} mph</b></span></div>`
+    : '';
+
   $('presetInfo').innerHTML =
+    speed +
     `<div class="info-row"><span>Score</span><span><b>${fmtScore(t.score)}</b></span></div>` +
     `<div class="info-row"><span>Trails completed</span><span><b>${t.trails_completed}</b></span></div>` +
     `<div class="info-row"><span>Unique miles</span><span><b>${t.unique_miles.toFixed(2)}</b></span></div>` +
     `<div class="info-row"><span>Distance walked</span><span><b>${t.walked_miles.toFixed(2)} mi</b></span></div>` +
     `<div class="info-row"><span>Finish time</span><span><b>${fmtClock(t.time_s)}</b></span></div>` +
     `<span class="info-note">Score = trails completed + unique miles.${claim}</span>` +
+    ruleBlock +
+    corridorBlock +
     (opt.caps_binding.length
       ? `<div class="caveat"><b>⚠ Not proven optimal</b><br>` +
         `${opt.caps_binding.map(esc).join('; ')}. ${esc(opt.note || '')}</div>`
@@ -450,9 +499,17 @@ function buildCsv() {
   const run = cumThrough(t.n_steps);
   const completedAt = completionsByStep();
 
+  const rule = PRESET.corridor_rule || {};
   const meta = [
     ['Hullabaloo Route Planner'],
-    ['Pace factor', PRESET.pace_factor.toFixed(2)],
+    ...(PRESET.speed_mph != null ? [['Top speed', `${PRESET.speed_mph.toFixed(1)} mph`]] : []),
+    ['Pace factor', PRESET.pace_factor.toFixed(4)],
+    ...(rule.corridor ? [
+      ['Plan', PRESET.option_label],
+      ['Constraint', rule.description],
+      ...(PRESET.delta_vs_free != null
+        ? [['Cost vs best available', `${PRESET.delta_vs_free.toFixed(2)} points`]] : []),
+    ] : []),
     ['Score', fmtScore(t.score)],
     ['Trails completed', `${t.trails_completed} of ${PRESET.network.n_trails}`],
     ['Unique trail miles', t.unique_miles.toFixed(2)],
@@ -512,7 +569,11 @@ function downloadCsv() {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `hullabaloo_route_pace${PRESET.pace_factor.toFixed(2)}.csv`;
+  // Named after whichever family this itinerary came from, so three plans downloaded at
+  // the same speed do not overwrite each other in the downloads folder.
+  link.download = PRESET.option
+    ? `hullabaloo_route_${PRESET.speed_mph.toFixed(1)}mph_${PRESET.option}.csv`
+    : `hullabaloo_route_pace${PRESET.pace_factor.toFixed(2)}.csv`;
   link.click();
   // Revoked on the next tick rather than immediately: the click only *starts* the save, and
   // browsers that read the blob asynchronously will hand back an empty file if the URL has
@@ -591,8 +652,115 @@ function presetFile(pace) {
   return `data/preset_p${String(Math.round(pace * 100)).padStart(3, '0')}.json`;
 }
 
-function selectedPace() {
-  return +(document.querySelector('input[name="pace"]:checked')?.value ?? 1.3);
+function presetSpeedFile(mph, option) {
+  // Mirrors webexport.preset_speed_filename(): (6.0, 'a') -> preset_s60a.json
+  return `data/preset_s${String(Math.round(mph * 10)).padStart(2, '0')}${option}.json`;
+}
+
+function selectedSpeed() {
+  const el = document.querySelector('input[name="speed"]:checked');
+  return el ? +el.value : null;
+}
+
+function selectedOption() {
+  const el = document.querySelector('input[name="option"]:checked');
+  return el ? el.value : 'a';
+}
+
+// ── Controls, built from the manifest ──────────────────────────────────────
+// The page used to carry a hardcoded list of radio buttons that nothing checked against
+// docs/data/. A preset that failed to solve left a button that 404s; one that solved
+// without a matching button was invisible. Building the controls from the manifest means a
+// control exists exactly when the file behind it does.
+
+let MANIFEST = null;
+let ACTIVE_SPEED = null;
+
+function tierFor(mph) {
+  return MANIFEST?.speeds.find(t => Math.abs(t.mph - mph) < 1e-9) ?? null;
+}
+
+function buildSpeedControls() {
+  const box = $('speedOptions');
+  box.innerHTML = MANIFEST.speeds.map(tier => {
+    const note = tier.mph === MANIFEST.speeds[0].mph ? ' <span class="param-note">steady</span>'
+      : tier.mph === MANIFEST.speeds[MANIFEST.speeds.length - 1].mph
+        ? ' <span class="param-note">elite</span>' : '';
+    return `<label title="pace factor ${tier.pace_factor.toFixed(3)} — about ${(tier.mph * 0.84).toFixed(1)} mph on the flat">` +
+      `<input type="radio" name="speed" value="${tier.mph}"> ${tier.mph.toFixed(1)} mph${note}</label>`;
+  }).join('');
+}
+
+// Rebuilt whenever the speed changes: the labels carry each option's score at *this*
+// speed, so the cost of a commitment is visible before you click it.
+function buildOptionControls(mph) {
+  const tier = tierFor(mph);
+  const box = $('optionOptions');
+  if (!tier) { box.innerHTML = ''; return; }
+
+  const chosen = selectedOption();
+  box.innerHTML = tier.options.map(opt => {
+    const delta = opt.delta_vs_free == null || Math.abs(opt.delta_vs_free) < 5e-4
+      ? '' : ` <span class="param-note">${opt.delta_vs_free.toFixed(1)} pts</span>`;
+    return `<label title="${esc(opt.description || '')}">` +
+      `<input type="radio" name="option" value="${opt.option}"` +
+      `${opt.option === chosen ? ' checked' : ''}> ${esc(opt.label)}${delta}</label>`;
+  }).join('');
+  if (!document.querySelector('input[name="option"]:checked')) {
+    document.querySelector('input[name="option"]').checked = true;
+  }
+  box.querySelectorAll('input[name="option"]').forEach(el =>
+    el.addEventListener('change', () => { stopPlaying(); loadCurrent(); }));
+}
+
+function buildPaceControls() {
+  const box = $('paceOptions');
+  if (!MANIFEST.paces.length) { $('paceLegacy').style.display = 'none'; return; }
+  // The mph equivalent rides alongside the multiplier rather than hiding in a tooltip:
+  // anyone reading this panel is comparing it against the speed tiers above, and a bare
+  // "1.60" cannot be lined up against "6.0 mph" without doing the conversion by hand.
+  box.innerHTML = MANIFEST.paces.map(entry =>
+    `<label title="pace ${entry.pace_factor.toFixed(2)} = ${entry.speed_mph.toFixed(2)} mph at Tobler's peak">` +
+    `<input type="radio" name="pace" value="${entry.pace_factor}"> ` +
+    `${entry.pace_factor.toFixed(2)} <span class="param-note">${entry.speed_mph.toFixed(1)} mph</span></label>`
+  ).join('');
+  // Picking a pace deselects the speed tiers, for the same reason the reverse holds: two
+  // lit controls describing different itineraries would misreport which one is on screen.
+  box.querySelectorAll('input[name="pace"]').forEach(el =>
+    el.addEventListener('change', () => {
+      stopPlaying();
+      document.querySelectorAll('input[name="speed"], input[name="option"]')
+        .forEach(other => { other.checked = false; });
+      loadPreset(presetFile(+el.value));
+    }));
+}
+
+// Load whatever the speed + option controls currently point at, and drop any legacy pace
+// selection — the two families are alternative answers to different questions, so showing
+// one selected while the other is on screen would misreport which is being displayed.
+//
+// The speed is remembered here rather than read back from the DOM every time, because
+// choosing a legacy pace clears the speed radios; without it, the option buttons would go
+// dead the moment someone looked at the pace sweep and came back.
+function loadCurrent() {
+  const mph = selectedSpeed() ?? ACTIVE_SPEED;
+  if (mph == null) return Promise.resolve();
+  ACTIVE_SPEED = mph;
+
+  document.querySelectorAll('input[name="pace"]').forEach(el => { el.checked = false; });
+  const speedEl = document.querySelector(`input[name="speed"][value="${mph}"]`);
+  if (speedEl) speedEl.checked = true;
+
+  return loadPreset(presetSpeedFile(mph, selectedOption()));
+}
+
+// A new speed means new option labels (the score deltas are per-speed), so the option
+// controls are rebuilt here and only here — never from inside their own change handler.
+function onSpeedChange() {
+  stopPlaying();
+  ACTIVE_SPEED = selectedSpeed();
+  buildOptionControls(ACTIVE_SPEED);
+  return loadCurrent();
 }
 
 const showLoading = on => $('loading').classList.toggle('visible', on);
@@ -603,7 +771,7 @@ function goHome() {
 
 let loadSeq = 0;   // last-click-wins: a stale fetch must not overwrite a newer one
 
-async function loadPreset(pace) {
+async function loadPreset(file) {
   const seq = ++loadSeq;
   showLoading(true);
   const errEl = $('presetError');
@@ -622,7 +790,6 @@ async function loadPreset(pace) {
       map.invalidateSize();
       goHome();
     }
-    const file = presetFile(pace);
     const preset = await fetch(file, FETCH_OPTS).then(r => {
       if (!r.ok) throw new Error(`${file.split('/').pop()} not found — has it been solved yet?`);
       return r.json();
@@ -700,11 +867,6 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // ── Step controls ────────────────────────────────────────────────────────
-  const stopPlaying = () => {
-    if (stepPlayTimer) { clearInterval(stepPlayTimer); stepPlayTimer = null; }
-    $('btnStepPlay').textContent = '▶ Play';
-  };
-
   $('stepSlider').addEventListener('input', function () { setStep(+this.value); });
   $('btnStepPrev').addEventListener('click', () => { stopPlaying(); setStep(currentStep - 1); });
   $('btnStepNext').addEventListener('click', () => { stopPlaying(); setStep(currentStep + 1); });
@@ -792,8 +954,36 @@ document.addEventListener('DOMContentLoaded', () => {
   if (localStorage.getItem('hullabalooTheme') === 'dark') applyTheme(true);
 
   // ── Preset selection ─────────────────────────────────────────────────────
-  document.querySelectorAll('input[name="pace"]').forEach(el =>
-    el.addEventListener('change', () => { stopPlaying(); loadPreset(selectedPace()); }));
+  // Every control is built from the manifest, so nothing is wired up until it arrives.
+  // If it cannot be fetched there is no itinerary to show and no set of buttons that
+  // would honestly represent one, so the failure is reported rather than papered over.
+  fetch(MANIFEST_URL, FETCH_OPTS)
+    .then(r => {
+      if (!r.ok) throw new Error('presets.json not found — has the build been run?');
+      return r.json();
+    })
+    .then(manifest => {
+      MANIFEST = manifest;
+      buildSpeedControls();
+      buildPaceControls();
 
-  loadPreset(selectedPace());
+      // Default to the middle of the published range rather than an end of it: the
+      // extremes are the least likely to describe a given racer.
+      const tiers = MANIFEST.speeds;
+      const initial = tiers[Math.floor((tiers.length - 1) / 2)];
+      const initialEl = document.querySelector(`input[name="speed"][value="${initial.mph}"]`);
+      if (initialEl) initialEl.checked = true;
+
+      document.querySelectorAll('input[name="speed"]').forEach(el =>
+        el.addEventListener('change', onSpeedChange));
+
+      buildOptionControls(initial.mph);
+      return loadCurrent();
+    })
+    .catch(err => {
+      const errEl = $('presetError');
+      errEl.textContent = err.message;
+      errEl.style.display = 'block';
+      showLoading(false);
+    });
 });

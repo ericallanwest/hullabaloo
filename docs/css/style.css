@@ -102,10 +102,31 @@ body.sidebar-hidden #sidebar-toggle { right: 0; }
 .param-options input[type=radio] { accent-color: var(--accent); cursor: pointer; }
 .param-note { font-size: 10px; color: var(--muted); }
 
+/* The legacy pace sweep, folded away: it answers a modelling question rather than a
+   racing one, so it should be findable without competing with the speed tiers. */
+#paceLegacy > summary { list-style: none; cursor: pointer; }
+#paceLegacy > summary::-webkit-details-marker { display: none; }
+#paceLegacy > summary::before { content: '▸ '; }
+#paceLegacy[open] > summary::before { content: '▾ '; }
+#paceLegacy > .param-options { margin-top: 6px; }
+
 #presetInfo { margin-top: 16px; font-size: 11px; color: var(--muted); line-height: 2.0; }
 #presetInfo .info-row { display: flex; justify-content: space-between; border-bottom: 1px solid var(--hairline); padding: 2px 0; }
 #presetInfo .info-row b { color: var(--text); }
 #presetInfo .info-note { display: block; margin-top: 10px; line-height: 1.5; font-size: 10px; }
+/* What this plan committed to, and what that cost. Set apart from the totals above it
+   because it describes the question asked, not the answer. */
+#presetInfo .info-rule {
+  margin-top: 10px; padding: 7px 9px; border-radius: 4px;
+  background: var(--active-bg); line-height: 1.5;
+}
+#presetInfo .info-rule b { color: var(--text); font-size: 12px; }
+#presetInfo .info-rule .info-note { margin-top: 4px; }
+#presetInfo .info-sub {
+  margin-top: 12px; margin-bottom: 2px; font-size: 10px; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--accent);
+}
+#presetInfo .info-row .info-note { display: inline; margin-top: 0; }
 #presetError { margin-top: 8px; font-size: 11px; color: var(--accent); display: none; }
 /* Shown when a scoring cap binds: the route is valid but the optimality claim is not. */
 .caveat {

@@ -77,6 +77,22 @@ FT_PER_M = 3.280839895
 # --------------------------------------------------------------------------------------
 
 
+#: One km/h in mph. Duplicated as ``tobler.KMH_TO_MPH``, which is the one importers should
+#: use; it lives here too only so ``ToblerParams`` can derive its own default without
+#: importing a module that imports this one.
+_KMH_TO_MPH = 0.621371
+
+#: Tobler's own base speed, km/h — the peak of the unscaled function.
+_TOBLER_BASE_KMH = 6.0
+
+#: The speed this project is planned around, in mph, measured at Tobler's peak gradient.
+#:
+#: Itineraries are branded by this quantity rather than by ``pace_factor``, because a
+#: multiplier is not something a racer can feel. 5.0 mph is the bottom rung of the
+#: published speed range and the pace every committed artefact is priced at.
+DEFAULT_TOP_SPEED_MPH = 5.0
+
+
 @dataclass(frozen=True)
 class ToblerParams:
     """Parameterized Tobler hiking function.
@@ -87,7 +103,7 @@ class ToblerParams:
     asymmetric and therefore makes direction of travel matter.
     """
 
-    base_kmh: float = 6.0
+    base_kmh: float = _TOBLER_BASE_KMH
     k: float = 3.5
     s0: float = 0.05
     #: Multiplier applied to on-trail speed when travelling off-trail (bushwhacking).
@@ -95,12 +111,21 @@ class ToblerParams:
     #: Global pace multiplier — a place to encode fatigue, pack weight, or personal
     #: fitness once calibrated. 1.0 == textbook Tobler.
     #:
-    #: Set to 1.35 for this racer: Tobler's constants describe unhurried walking, and a
-    #: fit competitor moving with purpose over seven hours is meaningfully quicker. This
-    #: puts peak speed at 8.1 km/h (5.03 mph) on a gentle downhill and 6.80 km/h
-    #: (4.23 mph, ~14.2 min/mile) on the flat. It scales every speed linearly, so the
-    #: shape of the function — and which direction round a loop is faster — is unchanged.
-    pace_factor: float = 1.35
+    #: Not chosen as a multiplier. It is *derived* from a speed: at the peak gradient
+    #: ``-s0`` the exponential term is exactly 1, so peak speed is ``base_kmh * pace``
+    #: with no dependence on ``k``, and the two quantities convert exactly. Writing the
+    #: division out here rather than pasting the number it evaluates to (1.3411) is the
+    #: whole point — the pace has no meaning of its own, and a reader should be able to
+    #: see which speed it came from without evaluating an exponential by hand.
+    #:
+    #: Tobler's constants describe unhurried walking; a fit competitor moving with
+    #: purpose over seven hours is meaningfully quicker. 5.0 mph at the peak works out to
+    #: 4.20 mph (14.3 min/mile) on the flat. It scales every speed linearly, so the shape
+    #: of the function — and which direction round a loop is faster — is unchanged.
+    #:
+    #: See ``tobler.pace_for_top_speed_mph`` for the same conversion as a function, and
+    #: ``scripts/build_presets.py`` for the six speeds the site publishes.
+    pace_factor: float = DEFAULT_TOP_SPEED_MPH / (_TOBLER_BASE_KMH * _KMH_TO_MPH)
     #: Speed floor so that pathological slopes cannot produce ~infinite traversal times.
     min_speed_kmh: float = 0.15
 
