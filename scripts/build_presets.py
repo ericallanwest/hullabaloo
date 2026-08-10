@@ -45,7 +45,7 @@ from pathlib import Path
 import geopandas as gpd
 import numpy as np
 
-from hullabaloo import corridors, elevation as elev, webexport
+from hullabaloo import adapt, corridors, elevation as elev, webexport
 from hullabaloo.config import CONFIG, EDGES, EDGES_TIMED, NODES, OUTPUTS
 from hullabaloo.graph import build_network
 from hullabaloo.optimize_alns import ALNS, build_trail_chains
@@ -58,16 +58,108 @@ log = logging.getLogger("hullabaloo.presets")
 #: The legacy pace sweep. 1.0 is textbook Tobler; 2.0 is elite.
 PACE_FACTORS = (1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0)
 
+#: The mark the adaptive plan optimises its standing score at — an hour short of the
+#: budget. Chosen because that is roughly what being 15% slower than modelled costs you,
+#: which is the failure the adaptive plan exists to absorb; optimising at, say, three hours
+#: would tune for a scenario in which nothing has gone wrong yet.
+FRONT_LOAD_AT_S = 6 * 3600.0
+
 
 def rule_for(net, option: str):
-    """The corridor rule behind each published option."""
-    if option == "a":
+    """The corridor rule behind each published option.
+
+    ``d`` carries no corridor rule at all — it differs from ``a`` in the order it banks
+    points, not in which ground is allowed.
+    """
+    if option in ("a", "d"):
         return corridors.free_rule()
     if option == "b":
         return corridors.require_rule(net)
     if option == "c":
         return corridors.forbid_rule(net)
     raise ValueError(f"unknown option {option!r}; expected one of {OPTIONS}")
+
+
+def published_optimum(mph: float, directory: Path) -> float | None:
+    """The proven optimum already on disk for this speed, if plan a has been built.
+
+    Lets ``--options d`` rebuild just the adaptive family without re-solving plan a for its
+    score alone — a full MILP proof to look up a number that is already published. The
+    ceiling has to come from a *proven* solve, so nothing but option a will do.
+    """
+    path = directory / webexport.preset_speed_filename(mph, "a")
+    if not path.exists():
+        return None
+    document = json.loads(path.read_text(encoding="utf-8"))
+    return float(document["totals"]["score"])
+
+
+def solve_adaptive(
+    pace: float,
+    edges_raw,
+    edge_profiles,
+    nodes,
+    *,
+    alns_iterations: int,
+    alns_seeds: int,
+    optimum: float,
+    tag: str,
+):
+    """Search for the most front-loaded route within the gap budget of ``optimum``.
+
+    No MILP here, deliberately. The MILP has no notion of sequence — it chooses a set of
+    arcs and the walk order falls out of a Hierholzer pass afterwards — so it cannot be
+    asked for a route that scores *early*. The ALNS can, because its solution representation
+    is a visit order. The MILP still sets the ceiling: ``optimum`` comes from plan ``a`` at
+    this same speed, so the gap being paid is known exactly rather than estimated.
+    """
+    tobler = dataclasses.replace(CONFIG.tobler, pace_factor=pace)
+    timed = elev.price_edges(edges_raw, edge_profiles, tobler)
+    net = build_network(timed, nodes)
+    floor = optimum - webexport.ADAPTIVE_GAP_BUDGET
+
+    best = None
+    for seed in range(alns_seeds):
+        result = ALNS(
+            net,
+            build_trail_chains(net),
+            seed=seed,
+            front_load_s=FRONT_LOAD_AT_S,
+            score_floor=floor,
+        ).solve(iterations=alns_iterations)
+        banked = adapt.front_load_score(result.route, FRONT_LOAD_AT_S)
+        log.info(
+            "  %s | ALNS seed %d: final %.3f, banked by %.1f h %.3f%s",
+            tag, seed, result.raw_score, FRONT_LOAD_AT_S / 3600, banked,
+            "" if result.raw_score >= floor else "  BELOW FLOOR",
+        )
+        if result.raw_score < floor:
+            continue
+        if best is None or banked > best[1]:
+            best = (result, banked)
+
+    if best is None:
+        raise SystemExit(
+            f"{tag}: no seed stayed within {webexport.ADAPTIVE_GAP_BUDGET} points of the "
+            f"{optimum:.3f} optimum; raise --alns-iterations or the gap budget"
+        )
+
+    result, banked = best
+    route = result.route
+    problems = route.validate()
+    if problems:
+        raise SystemExit(f"{tag}: adaptive route is invalid: {problems}")
+
+    meta = {
+        "source": "alns-adaptive",
+        "status": "heuristic",
+        "incumbent": round(result.raw_score, 3),
+        "optimum": round(optimum, 3),
+        "gap_pct": round(100 * (optimum - result.raw_score) / optimum, 2),
+        "banked_by_front_load_h": round(FRONT_LOAD_AT_S / 3600, 2),
+        "banked_score": round(banked, 3),
+    }
+    return net, route, corridors.free_rule(), meta
 
 
 def _reprice_check(edges_raw, edge_profiles) -> None:
@@ -196,21 +288,52 @@ def build_speed_tiers(speeds, options, ctx, args) -> list[dict]:
             log.info("=" * 72)
             log.info("TOP SPEED %.1f MPH  (pace %.4f)  option %s", mph, pace, option)
 
-            net, route, rule, meta = solve_at_pace(
-                pace,
-                ctx["edges_raw"],
-                ctx["edge_profiles"],
-                ctx["nodes"],
-                alns_iterations=args.alns_iterations,
-                alns_seeds=args.alns_seeds,
-                milp_seconds=args.milp_seconds,
-                option=option,
-                tag=tag,
-            )
+            if option == "d":
+                if free_score is None:
+                    free_score = published_optimum(mph, args.out)
+                if free_score is None:
+                    raise SystemExit(
+                        f"{tag}: the adaptive plan is defined relative to the optimum at "
+                        "this speed, so option a must be solved in this run or already "
+                        "published"
+                    )
+                net, route, rule, meta = solve_adaptive(
+                    pace,
+                    ctx["edges_raw"],
+                    ctx["edge_profiles"],
+                    ctx["nodes"],
+                    alns_iterations=args.alns_iterations,
+                    alns_seeds=args.alns_seeds,
+                    optimum=free_score,
+                    tag=tag,
+                )
+            else:
+                net, route, rule, meta = solve_at_pace(
+                    pace,
+                    ctx["edges_raw"],
+                    ctx["edge_profiles"],
+                    ctx["nodes"],
+                    alns_iterations=args.alns_iterations,
+                    alns_seeds=args.alns_seeds,
+                    milp_seconds=args.milp_seconds,
+                    option=option,
+                    tag=tag,
+                )
             meta["wall_seconds"] = round(time.time() - t0, 1)
             summary = route.evaluate()
             if option == "a":
                 free_score = summary["score"]
+
+            adaptive = adapt.summary(net, route) if option == "d" else None
+            if adaptive is not None:
+                log.info(
+                    "  %s | %d cuts, %.0f droppable minutes, %.3f banked by %.0f h",
+                    tag,
+                    len(adaptive["cuts"]),
+                    sum(c["minutes_saved"] for c in adaptive["cuts"]),
+                    adaptive["front_load"]["score_at_6h"],
+                    FRONT_LOAD_AT_S / 3600,
+                )
 
             # write_preset runs the self-checks, including the corridor rule; a preset
             # that fails them never lands on disk.
@@ -224,6 +347,7 @@ def build_speed_tiers(speeds, options, ctx, args) -> list[dict]:
                 option=option,
                 rule=rule,
                 free_score=None if option == "a" else free_score,
+                adaptive=adaptive,
             )
             rows.append(
                 {

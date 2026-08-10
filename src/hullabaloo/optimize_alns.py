@@ -34,6 +34,7 @@ import math
 import random
 from dataclasses import dataclass, field
 
+from .adapt import front_load_score
 from .config import CONFIG, RaceParams
 from .corridors import CorridorRule
 from .graph import Arc, Network, Route, score_edges
@@ -270,11 +271,19 @@ class ALNS:
         race: RaceParams | None = None,
         seed: int = 0,
         rule: CorridorRule | None = None,
+        front_load_s: float | None = None,
+        score_floor: float | None = None,
     ) -> None:
         self.net = net
         self.race = race or CONFIG.race
         self.rng = random.Random(seed)
         self.rule = rule or CorridorRule()
+        # Adaptive mode: score the route by what it has banked partway through rather than
+        # by where it finishes, holding the finish above a floor. The MILP cannot express
+        # this at all — it has no notion of sequence, only of which arcs are used — whereas
+        # an ALNS solution *is* a visit order, so front-loading is native here.
+        self.front_load_s = front_load_s
+        self.score_floor = score_floor
 
         chains = chains if chains is not None else build_trail_chains(net)
         # A forbidden trail is removed from the candidate pool outright, so the search
@@ -304,17 +313,28 @@ class ALNS:
     # -- scoring -----------------------------------------------------------------------
 
     def _score(self, order: list[int]) -> float:
-        """Decode a visit order and score it, net of any corridor-rule penalty.
+        """Decode a visit order and score it, net of any penalty.
 
-        Every operator and the acceptance test go through here, so the rule is applied
+        Every operator and the acceptance test go through here, so the rules are applied
         once, in one place, and cannot be forgotten by a code path that scores a candidate
         its own way.
         """
         route = decode(order, self.net, self.chains, self.race)
         score = evaluate(route)
-        if self.rule.is_free:
-            return score
-        return score - RULE_PENALTY * self.rule.violation_count(self.net, route)
+
+        penalty = 0.0
+        if not self.rule.is_free:
+            penalty += RULE_PENALTY * self.rule.violation_count(self.net, route)
+
+        if self.front_load_s is None:
+            return score - penalty
+
+        # Falling below the floor is charged in proportion to the shortfall rather than
+        # flatly: a route two points short and a route twenty points short are not equally
+        # wrong, and a flat penalty gives the search no gradient back into the feasible band.
+        if self.score_floor is not None and score < self.score_floor:
+            penalty += RULE_PENALTY * (self.score_floor - score)
+        return front_load_score(route, self.front_load_s, self.race) - penalty
 
     def decode_order(self, order: list[int]) -> Route:
         """The concrete walk an order expands to. Public so callers can re-check the rule."""

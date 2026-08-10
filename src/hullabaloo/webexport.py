@@ -61,7 +61,16 @@ COORD_DECIMALS = 5
 
 #: 2 added per-step turn cues (``turn``, ``turn_deg``, ``glyph``).
 #: 3 added speed branding (``speed_mph``, ``option``) and the corridor blocks.
-SCHEMA_VERSION = 3
+#: 4 added the ``adaptive`` block — priced cuts, salvage sets and the bail-out curve.
+SCHEMA_VERSION = 4
+
+#: Schema version each block of fields arrived in. A preset is required to be new enough
+#: for the fields it actually carries, rather than new enough to be the latest: the versions
+#: are pure additions, so an older file is not wrong, it is only smaller. Requiring every
+#: published preset to be current would mean re-solving eighteen itineraries for hours to
+#: gain keys they do not use.
+SCHEMA_WITH_OPTIONS = 3
+SCHEMA_WITH_ADAPTIVE = 4
 
 #: Oldest schema the page and the validator still read.
 #:
@@ -78,9 +87,23 @@ MIN_SUPPORTED_SCHEMA = 2
 #: manifest, which is what the page actually reads — this tuple is only the build's input.
 SPEED_TIERS = (5.0, 5.5, 6.0, 6.5, 7.0, 7.5)
 
-#: The three alternatives offered at each speed. ``a`` is the unconstrained optimum; ``b``
-#: and ``c`` take opposite sides of the pivotal corridor.
-OPTIONS = ("a", "b", "c")
+#: The alternatives offered at each speed. ``a`` is the unconstrained optimum; ``b`` and
+#: ``c`` take opposite sides of the pivotal corridor; ``d`` gives up a little of the
+#: optimum to be changeable while you run it.
+OPTIONS = ("a", "b", "c", "d")
+
+#: How far below the proven optimum an adaptive route is allowed to sit. Front-loading is
+#: not free — it means walking a different set of arcs, not the same ones in a better order
+#: — so the budget is stated once, published on the page, and asserted before the file
+#: ships rather than being left to the reader's trust.
+ADAPTIVE_GAP_BUDGET = 3.0
+
+ADAPTIVE_LABEL = "Adaptive"
+ADAPTIVE_DESCRIPTION = (
+    "Scores earlier and shortens cleanly. Gives up a little of the best available total in "
+    "exchange for banking trail points sooner and leaving a menu of cuts you can take mid-"
+    "race, each priced in advance."
+)
 
 
 # --------------------------------------------------------------------------------------
@@ -155,6 +178,7 @@ def preset_dict(
     option: str | None = None,
     rule: CorridorRule | None = None,
     free_score: float | None = None,
+    adaptive: dict | None = None,
 ) -> dict:
     """Build the itinerary document for one solved route.
 
@@ -263,12 +287,20 @@ def preset_dict(
     # impossible to reproduce from its own contents.
     speed = pace_factor * CONFIG.tobler.base_kmh * KMH_TO_MPH
 
+    # The adaptive plan is not defined by a corridor rule, so it names itself rather than
+    # borrowing a label that would describe a constraint it does not carry.
+    is_adaptive = adaptive is not None
+    label = ADAPTIVE_LABEL if is_adaptive else rule.label
+    description = ADAPTIVE_DESCRIPTION if is_adaptive else rule.description
+
     return {
         "schema_version": SCHEMA_VERSION,
         "speed_mph": round(float(speed), 2),
         "pace_factor": round(float(pace_factor), 4),
         "option": option,
-        "option_label": rule.label,
+        "option_label": label,
+        "option_description": description,
+        "adaptive": adaptive,
         "corridor_rule": rule.as_dict(),
         "corridors": corridor_breakdown(net, route),
         # How much this alternative gave up against the free optimum at the same speed.
@@ -304,6 +336,7 @@ def write_preset(
     option: str | None = None,
     rule: CorridorRule | None = None,
     free_score: float | None = None,
+    adaptive: dict | None = None,
 ) -> Path:
     """Write one itinerary and return its path.
 
@@ -327,6 +360,7 @@ def write_preset(
         option=option,
         rule=rule,
         free_score=free_score,
+        adaptive=adaptive,
     )
     check_preset(document, net=net, route=route, rule=rule)
     path.write_text(json.dumps(document, separators=(",", ":")), encoding="utf-8")
@@ -388,12 +422,17 @@ def manifest_dict(directory: Path = WEB_DATA) -> dict:
         entry = {
             "option": doc.get("option"),
             "label": doc.get("option_label"),
-            "description": (doc.get("corridor_rule") or {}).get("description"),
+            # The adaptive plan describes itself; only the corridor options are described by
+            # their rule. Reading the rule unconditionally would caption plan d with the
+            # free rule's "no constraint", which is true and completely beside the point.
+            "description": doc.get("option_description")
+            or (doc.get("corridor_rule") or {}).get("description"),
             "file": path.name,
             "score": doc["totals"]["score"],
             "trails_completed": doc["totals"]["trails_completed"],
             "unique_miles": doc["totals"]["unique_miles"],
             "delta_vs_free": doc.get("delta_vs_free"),
+            "adaptive": doc.get("adaptive") is not None,
         }
         speeds.setdefault(float(doc["speed_mph"]), []).append(entry)
 
@@ -560,6 +599,70 @@ def check_preset(
         check_turn(step)
 
     check_corridor_rule(document, net=net, route=route, rule=rule)
+    check_adaptive(document)
+
+
+def check_adaptive(document: dict) -> None:
+    """An adaptive plan's menu has to be internally honest.
+
+    Every entry here is a promise a racer acts on twenty miles in, with no way to check it:
+    that skipping this loop saves that many minutes and costs that many points, and that the
+    reduced-budget plan really does fit the reduced budget. Since the file is static and the
+    solver is nowhere nearby, the promises are asserted before it ships.
+    """
+    adaptive = document.get("adaptive")
+    if adaptive is None:
+        return
+
+    n_steps = document["totals"]["n_steps"]
+    budget = document["race"]["time_budget_s"]
+    total = document["totals"]["score"]
+
+    gap = document.get("delta_vs_free")
+    if gap is not None and gap < -(ADAPTIVE_GAP_BUDGET + 1e-6):
+        raise ValueError(
+            f"adaptive plan gives up {-gap:.3f} points against the best available plan, "
+            f"beyond the {ADAPTIVE_GAP_BUDGET:.1f}-point budget"
+        )
+    if gap is not None and gap > 1e-6:
+        raise ValueError(
+            f"adaptive plan claims to beat the unconstrained optimum by {gap:.3f} points, "
+            "which would mean the optimum was not optimal"
+        )
+
+    for cut in adaptive.get("cuts", []):
+        if cut["points_lost"] < -1e-6:
+            raise ValueError(
+                f"cut at hinge {cut['hinge']} claims to *gain* {-cut['points_lost']:.3f} "
+                "points — skipping ground can never score more than walking it"
+            )
+        if cut["minutes_saved"] <= 0:
+            raise ValueError(f"cut at hinge {cut['hinge']} saves no time")
+        if not 0 <= cut["arc_start"] < cut["arc_end"]:
+            raise ValueError(f"cut at hinge {cut['hinge']} has an empty or reversed span")
+
+    previous = None
+    for entry in sorted(adaptive.get("salvage", []), key=lambda s: -s["budget_s"]):
+        if entry["feasible"] and entry["time_s"] > entry["budget_s"] + 1.0:
+            raise ValueError(
+                f"salvage plan for {entry['budget_h']:.2f} h is marked feasible but takes "
+                f"{entry['time_s'] / 3600:.2f} h"
+            )
+        if entry["score"] > total + 1e-6:
+            raise ValueError(
+                f"salvage plan for {entry['budget_h']:.2f} h scores {entry['score']:.3f}, "
+                f"above the full route's {total:.3f} — cutting cannot add points"
+            )
+        if entry["budget_s"] > budget + 1e-6:
+            raise ValueError("salvage budget exceeds the race budget")
+        # Less time can never be worth more; a rise means the salvage search returned an
+        # inconsistent answer for one of the budgets.
+        if previous is not None and entry["score"] > previous + 1e-6:
+            raise ValueError(
+                f"salvage score rises as the budget falls ({previous:.3f} -> "
+                f"{entry['score']:.3f}), which cannot be right"
+            )
+        previous = entry["score"]
 
 
 def check_corridor_rule(
@@ -587,10 +690,16 @@ def check_corridor_rule(
     """
     # A speed-tier preset is defined by its option, so it must carry the blocks that say
     # which one it is. Only the legacy pace family may predate them.
-    if document.get("option") is not None and document["schema_version"] < SCHEMA_VERSION:
+    version = document["schema_version"]
+    if document.get("option") is not None and version < SCHEMA_WITH_OPTIONS:
         raise ValueError(
-            f"speed-tier preset is schema {document['schema_version']}, but the option "
-            f"blocks it needs arrived in schema {SCHEMA_VERSION}"
+            f"speed-tier preset is schema {version}, but the option blocks it needs "
+            f"arrived in schema {SCHEMA_WITH_OPTIONS}"
+        )
+    if document.get("adaptive") is not None and version < SCHEMA_WITH_ADAPTIVE:
+        raise ValueError(
+            f"preset carries an adaptive block but is schema {version}; that block "
+            f"arrived in schema {SCHEMA_WITH_ADAPTIVE}"
         )
 
     declared = document.get("corridor_rule") or {}
