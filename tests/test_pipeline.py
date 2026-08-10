@@ -7,7 +7,9 @@ skips rather than fails, so a partially-built checkout still gives useful signal
 
 from __future__ import annotations
 
+import copy
 import dataclasses
+import itertools
 
 import geopandas as gpd
 import numpy as np
@@ -474,6 +476,190 @@ def test_corridor_breakdown_accounts_for_every_scored_mile(net, sample_route):
     assert sum(row["n_trails"] for row in rows) == EXPECTED_TRAILS
 
 
+# --------------------------------------------------------------------------------------
+# Adaptive plans
+# --------------------------------------------------------------------------------------
+
+
+def test_every_excursion_is_a_closed_loop_in_the_walk(net, sample_route):
+    """An excursion must leave a node and come back to it, or splicing it out breaks the
+    route. This is the property the whole cut mechanism rests on."""
+    from hullabaloo import adapt
+
+    nodes = sample_route.nodes
+    found = adapt.excursions(sample_route)
+    assert found, "a real route always loops somewhere"
+
+    for excursion in found:
+        assert nodes[excursion.start] == nodes[excursion.end] == excursion.hinge
+        assert 0 <= excursion.start < excursion.end <= len(sample_route.arcs)
+
+
+def test_excursions_nest_rather_than_straddle(net, sample_route):
+    """Excursions form a laminar family: any two are disjoint or one contains the other.
+    Partial overlap would make "skip this loop" ambiguous about what else goes with it."""
+    from hullabaloo import adapt
+
+    found = adapt.excursions(sample_route)
+    for a, b in itertools.combinations(found, 2):
+        disjoint = a.end <= b.start or b.end <= a.start
+        assert disjoint or a.contains(b) or b.contains(a), (
+            f"excursions [{a.start}:{a.end}] and [{b.start}:{b.end}] partially overlap"
+        )
+
+    for i, child in enumerate(found):
+        if child.parent is not None:
+            assert found[child.parent].contains(child)
+            assert found[child.parent].depth == child.depth - 1
+
+
+def test_dropping_a_cut_leaves_a_walkable_route(net, sample_route):
+    """The payoff of using contiguous excursions: no connectivity check is needed, because
+    the arcs before a cut end exactly where the arcs after it begin."""
+    from hullabaloo import adapt
+
+    for cut in adapt.cuts(net, sample_route):
+        span = (cut.excursion.start, cut.excursion.end)
+        shortened = adapt.drop(sample_route, [span])
+        assert shortened.arcs, "a published cut must not empty the route"
+        assert not shortened.validate(), f"cut at hinge {cut.excursion.hinge} broke the walk"
+        assert shortened.time_s < sample_route.time_s
+
+
+def test_cut_costs_are_measured_not_assumed(net, sample_route):
+    """Each published cost must equal what re-scoring the shortened walk actually gives."""
+    from hullabaloo import adapt
+    from hullabaloo.graph import score_edges
+
+    race = sample_route.race or CONFIG.race
+    base, _, _ = score_edges({a.edge_id for a in sample_route.arcs}, net, race)
+
+    for cut in adapt.cuts(net, sample_route):
+        shortened = adapt.drop(
+            sample_route, [(cut.excursion.start, cut.excursion.end)]
+        )
+        actual, _, _ = score_edges({a.edge_id for a in shortened.arcs}, net, race)
+        assert cut.points_lost == pytest.approx(base - actual, abs=1e-6)
+        assert cut.points_lost >= -1e-9, "skipping ground cannot score more than walking it"
+
+
+def test_cut_costs_do_not_add_up(net, sample_route):
+    """Regression guard for the trap this design exists around.
+
+    Scoring is over the *set* of edges walked and a trail scores only when every one of its
+    edges is covered, so a trail can straddle two excursions: drop either and you keep it,
+    drop both and it is gone. Summing single-cut costs therefore understates a pair, which
+    is why salvage plans are costed jointly. If this ever stops being true the joint search
+    is merely redundant — but if it is true and we summed anyway, the menu would lie."""
+    from hullabaloo import adapt
+    from hullabaloo.graph import score_edges
+
+    race = sample_route.race or CONFIG.race
+    base, _, _ = score_edges({a.edge_id for a in sample_route.arcs}, net, race)
+    available = adapt.cuts(net, sample_route)
+
+    deviations = []
+    for a, b in itertools.combinations(available, 2):
+        if a.excursion.overlaps(b.excursion):
+            continue
+        shortened = adapt.drop(
+            sample_route,
+            [(a.excursion.start, a.excursion.end), (b.excursion.start, b.excursion.end)],
+        )
+        actual, _, _ = score_edges({x.edge_id for x in shortened.arcs}, net, race)
+        deviations.append((base - actual) - (a.points_lost + b.points_lost))
+
+    if not deviations:
+        pytest.skip("route offers no two disjoint cuts to combine")
+    # Joint cost is never *less* than the sum: cutting more can only lose more.
+    assert min(deviations) > -1e-6
+
+
+def test_salvage_fits_its_budget_and_degrades_monotonically(net, sample_route):
+    """Less time can never buy more points, and a plan claiming to fit must fit."""
+    from hullabaloo import adapt
+
+    race = sample_route.race or CONFIG.race
+    budget = float(race.time_budget_s)
+    available = adapt.cuts(net, sample_route)
+
+    previous = None
+    for fraction in adapt.SALVAGE_FRACTIONS:
+        target = budget * fraction
+        plan = adapt.salvage(net, sample_route, target, available)
+        if plan.feasible:
+            assert plan.seconds <= target + 1.0
+        assert plan.score <= sample_route.evaluate()["score"] + 1e-6
+        if previous is not None:
+            assert plan.score <= previous + 1e-6
+        previous = plan.score
+
+
+def test_bailout_curve_never_overstates_what_you_keep(net, sample_route):
+    """The curve is what a racer trusts when deciding to quit, so it must not flatter."""
+    from hullabaloo import adapt
+
+    curve = adapt.bailout_curve(net, sample_route)
+    assert len(curve) == len(sample_route.arcs)
+
+    final = sample_route.evaluate()["score"]
+    for row in curve:
+        assert row["score_if_home_now"] <= final + 1e-6
+        assert row["home_s"] >= 0
+        assert row["finish_s"] == pytest.approx(row["elapsed_s"] + row["home_s"], abs=0.2)
+
+    assert [r["elapsed_s"] for r in curve] == sorted(r["elapsed_s"] for r in curve)
+    # Walking home from the finish is free, so the last row is the full route.
+    assert curve[-1]["score_if_home_now"] == pytest.approx(final, abs=1e-6)
+
+
+def test_front_load_score_is_monotone_and_bounded(net, sample_route):
+    from hullabaloo import adapt
+
+    final = sample_route.evaluate()["score"]
+    marks = [0.0, 3600.0, 3 * 3600.0, 6 * 3600.0, sample_route.time_s + 1]
+    values = [adapt.front_load_score(sample_route, t) for t in marks]
+
+    assert values == sorted(values), "score cannot fall as the clock runs"
+    assert values[0] == 0.0
+    # ``evaluate`` publishes a rounded score; this one is raw, so compare at that precision.
+    assert values[-1] == pytest.approx(final, abs=1e-3)
+
+
+def test_check_adaptive_rejects_a_dishonest_menu(net, sample_route):
+    """The menu is acted on twenty miles from the car with no way to verify it, so the
+    claims are asserted before the file ships."""
+    from hullabaloo import adapt, webexport
+
+    document = webexport.preset_dict(
+        net,
+        sample_route,
+        pace_factor=CONFIG.tobler.pace_factor,
+        option="d",
+        adaptive=adapt.summary(net, sample_route),
+        free_score=sample_route.evaluate()["score"],
+    )
+    webexport.check_preset(document)
+    assert document["option_label"] == webexport.ADAPTIVE_LABEL
+
+    if document["adaptive"]["cuts"]:
+        lying = copy.deepcopy(document)
+        lying["adaptive"]["cuts"][0]["points_lost"] = -2.0
+        with pytest.raises(ValueError, match="gain"):
+            webexport.check_preset(lying)
+
+    if document["adaptive"]["salvage"]:
+        impossible = copy.deepcopy(document)
+        impossible["adaptive"]["salvage"][0]["score"] = 999.0
+        with pytest.raises(ValueError, match="cutting cannot add points"):
+            webexport.check_preset(impossible)
+
+    overspent = copy.deepcopy(document)
+    overspent["delta_vs_free"] = -(webexport.ADAPTIVE_GAP_BUDGET + 1.0)
+    with pytest.raises(ValueError, match="beyond the"):
+        webexport.check_preset(overspent)
+
+
 def test_corridor_rule_detects_both_kinds_of_violation(net, sample_route):
     """The rule must catch a route that breaks it — this is the only thing standing
     between a mislabelled option and the page."""
@@ -796,9 +982,10 @@ def test_preset_speed_filename_matches_the_front_end():
     assert preset_speed_filename(5.0, "a") == "preset_s50a.json"
     assert preset_speed_filename(6.5, "b") == "preset_s65b.json"
     assert preset_speed_filename(7.5, "c") == "preset_s75c.json"
+    assert preset_speed_filename(6.0, "d") == "preset_s60d.json"
 
     with pytest.raises(ValueError):
-        preset_speed_filename(6.0, "d")
+        preset_speed_filename(6.0, "z")
 
 
 def test_milp_model_carries_the_corridor_constraints(net):
@@ -958,7 +1145,15 @@ def test_published_presets_still_reconcile():
 
     for path in sorted(webexport.WEB_DATA.glob("preset_s*.json")):
         document = json.loads(path.read_text(encoding="utf-8"))
-        assert document["schema_version"] == webexport.SCHEMA_VERSION, path.name
+        # New enough for the fields it carries, not necessarily the latest — the versions
+        # are pure additions, and an adaptive plan is checked against its own floor below.
+        assert (
+            webexport.SCHEMA_WITH_OPTIONS
+            <= document["schema_version"]
+            <= webexport.SCHEMA_VERSION
+        ), path.name
+        if document.get("adaptive") is not None:
+            assert document["schema_version"] >= webexport.SCHEMA_WITH_ADAPTIVE, path.name
         assert path.name == webexport.preset_speed_filename(
             document["speed_mph"], document["option"]
         )

@@ -87,9 +87,9 @@ of an arc is mostly that displacement. **⬇ Download CSV** hands the whole thin
 summary block at the top, then a line per leg carrying the turn, the distance, the clock and
 the running score.
 
-The left-hand controls pick from eighteen pre-solved itineraries: six **top speeds** from
-5.0 to 7.5 mph, and at each speed three **plans** that differ in what they are willing to
-commit to.
+The left-hand controls pick from twenty-four pre-solved itineraries: six **top speeds** from
+5.0 to 7.5 mph, and at each speed four **plans** — three that differ in what they are
+willing to commit to, and a fourth built to be changed while you are running it.
 
 Speed is branded in mph rather than as a multiplier because a multiplier is not something a
 racer can feel. The number quoted is the peak of Tobler's curve, reached on a gentle
@@ -98,13 +98,13 @@ downhill; flat ground runs about 16% slower, so the 6.0 mph tier is a 11:54 flat
 term is 1, so peak speed is just `base_kmh x pace_factor` and the two convert without
 fitting anything.
 
-The three plans at each speed exist because the network poses one genuinely open question:
-whether to go west. The **West End** — Poverty Creek (lower), Skullcap, Trillium, Beauty and
+The first three exist because the network poses one genuinely open question: whether to go
+west. The **West End** — Poverty Creek (lower), Skullcap, Trillium, Beauty and
 neighbours, 8.3 miles of trail — sits four to five km from the start line, so reaching it
 costs a long out-and-back. Plan **a** is the unconstrained optimum. Plan **b** insists the
 West End is completed; plan **c** forbids it outright.
 
-The point of publishing all three is that **the right answer flips inside the published
+The point of publishing a, b and c is that **the right answer flips inside the published
 range**. Each plan is solved to proven optimality under its own rule, and the cost of each
 constraint moves monotonically and in opposite directions:
 
@@ -121,6 +121,36 @@ Below about 6.2 mph the long haul west is not worth its out-and-back and skippin
 cheaper compromise; above it, the West End's 8.3 miles are reachable cheaply enough that
 *not* going is the expensive choice. A racer whose speed sits near that crossover is exactly
 the racer a single itinerary would serve worst, which is the argument for the grid.
+
+### Plan d — the one you can change your mind about
+
+The three plans above are all knife-edge optimal: each spends the budget to the second and
+finishes between 6:59 and 7:00. That is what optimal looks like, and it is also brittle. A
+racer running 5% slower than modelled is twenty minutes over with no guidance about what to
+give up, deciding at mile 20 what the solver spent five minutes deciding at a desk.
+
+Plan **d** gives up a little of the total — at most three points against the proven
+optimum — to bank trail points earlier and to shorten cleanly. It ships with a menu of
+**cuts**, each priced in advance: skip this loop, save this many minutes, lose these points.
+
+The unit is a **contiguous closed excursion** — a stretch of the walk that leaves a junction
+and comes back to it. Splicing one out is always safe, because the arcs before it end where
+the arcs after it begin, so what remains is still one closed walk from the start line back to
+it. No re-solve, no chance of stranding the route on the far side of the property. A typical
+route offers around nine of these, worth roughly two hours of droppable time in total.
+
+Two things about the menu are worth stating plainly, because both are easy to get wrong:
+
+**The costs do not add up.** Scoring is over the *set* of edges walked and a trail scores
+only when every one of its edges is covered, so a trail can straddle two excursions: drop
+either and you keep it, drop both and it is gone. On the shipped 5.0 mph route there is a
+pair that costs exactly **one point more together than apart**. Every reduced-budget plan is
+therefore costed as a whole, never by summing the singles.
+
+**Each threshold is a split time.** Because the plan has no slack, "keep this loop only if
+the clock is before X" works out to the planned arrival time at that junction. Hit the
+junction on schedule and the loop is affordable; arrive late and it is not, by exactly the
+margin you are late.
 
 Folded away below them is the older **pace sweep**, eleven itineraries from 1.0 (textbook
 Tobler) to 2.0. It answers a modelling question rather than a racing one: pace is the one

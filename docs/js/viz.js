@@ -442,10 +442,13 @@ function renderPresetInfo() {
   // the same speed, which is the only comparison that isolates the cost of the rule —
   // comparing across speeds would fold in how fast the racer is.
   const rule = PRESET.corridor_rule || {};
+  const adaptive = PRESET.adaptive;
   const cost = PRESET.delta_vs_free;
-  const ruleBlock = !rule.corridor ? '' :
+  const describes = PRESET.option_description || rule.description || '';
+  const named = !!(rule.corridor || adaptive);
+  const ruleBlock = !named ? '' :
     `<div class="info-rule"><b>${esc(PRESET.option_label || '')}</b>` +
-    `<br><span class="info-note">${esc(rule.description || '')}</span>` +
+    `<br><span class="info-note">${esc(describes)}</span>` +
     (cost == null ? '' :
       `<br><span class="info-note">Costs <b>${Math.abs(cost).toFixed(2)}</b> points ` +
       `against the best available plan at this speed.</span>`) +
@@ -466,6 +469,45 @@ function renderPresetInfo() {
     ? `<div class="info-row"><span>Top speed</span><span><b>${PRESET.speed_mph.toFixed(1)} mph</b></span></div>`
     : '';
 
+  // The adaptive plan's whole reason for existing: what you can give up, what it costs,
+  // and the clock reading past which the decision has already been made for you.
+  let adaptiveBlock = '';
+  if (adaptive) {
+    const cuts = (adaptive.cuts || []).slice().sort((a, b) => a.points_per_minute - b.points_per_minute);
+    if (cuts.length) {
+      adaptiveBlock +=
+        `<div class="info-sub">If you fall behind — cheapest first</div>` +
+        cuts.map(c => {
+          const when = c.keep_before_s == null
+            ? 'any time'
+            : `past ${fmtClock(c.keep_before_s)}`;
+          return `<div class="info-row" title="Junction ${c.hinge}. Skipping this loop saves ` +
+            `${c.minutes_saved} min and ${c.miles_saved.toFixed(2)} scored miles.">` +
+            `<span>Skip loop at ${c.hinge}<span class="info-note"> — drop if ${esc(when)}</span></span>` +
+            `<span><b>−${c.points_lost.toFixed(1)}</b>` +
+            `<span class="info-note"> / ${c.minutes_saved}m</span></span></div>`;
+        }).join('');
+    }
+
+    const salv = adaptive.salvage || [];
+    if (salv.length) {
+      adaptiveBlock +=
+        `<div class="info-sub">If you only have…</div>` +
+        salv.map(s => {
+          const by = s.decide_by_s == null ? '' :
+            `<span class="info-note"> · commit by ${fmtClock(s.decide_by_s)}</span>`;
+          return `<div class="info-row"><span>${s.budget_h.toFixed(1)} h${by}</span>` +
+            `<span><b>${fmtScore(s.score)}</b>` +
+            `<span class="info-note"> · ${s.trails_completed} trails` +
+            `${s.feasible ? '' : ' · not reachable'}</span></span></div>`;
+        }).join('') +
+        `<span class="info-note">A cut is only on offer until you reach its junction, so ` +
+        `each row shows the clock by which you have to decide. Rows are costed as whole ` +
+        `plans, never by adding the cuts above together — a trail can straddle two loops, ` +
+        `so dropping both forfeits a point neither drop loses on its own.</span>`;
+    }
+  }
+
   $('presetInfo').innerHTML =
     speed +
     `<div class="info-row"><span>Score</span><span><b>${fmtScore(t.score)}</b></span></div>` +
@@ -475,6 +517,7 @@ function renderPresetInfo() {
     `<div class="info-row"><span>Finish time</span><span><b>${fmtClock(t.time_s)}</b></span></div>` +
     `<span class="info-note">Score = trails completed + unique miles.${claim}</span>` +
     ruleBlock +
+    adaptiveBlock +
     corridorBlock +
     (opt.caps_binding.length
       ? `<div class="caveat"><b>⚠ Not proven optimal</b><br>` +
@@ -557,7 +600,40 @@ function buildCsv() {
     (completedAt.get(s.i) || []).join('; '),
   ));
 
-  return [...meta.map(cells => csvRow(...cells)), '', header, ...rows].join('\r\n');
+  // The decision table goes in the file, not just on the screen. This is the artifact a
+  // racer carries, and the cuts are precisely the thing he needs when he is nowhere near
+  // a browser and has to decide whether the next loop still fits.
+  const adaptive = PRESET.adaptive;
+  const extra = [];
+  if (adaptive && (adaptive.cuts || []).length) {
+    extra.push('', 'IF YOU FALL BEHIND — cheapest to give up first');
+    extra.push(csvRow(
+      'Junction', 'You reach it at', 'Drop if past', 'Minutes saved', 'Miles saved', 'Points lost'));
+    for (const c of adaptive.cuts.slice().sort((a, b) => a.points_per_minute - b.points_per_minute)) {
+      extra.push(csvRow(
+        c.hinge,
+        c.reach_s == null ? '' : fmtClock(c.reach_s),
+        c.keep_before_s == null ? 'any time' : fmtClock(c.keep_before_s),
+        c.minutes_saved,
+        c.miles_saved.toFixed(2),
+        c.points_lost.toFixed(2),
+      ));
+    }
+  }
+  if (adaptive && (adaptive.salvage || []).length) {
+    extra.push('', 'IF YOU ONLY HAVE (each row costed as a whole plan, not by summing cuts)');
+    extra.push(csvRow('Hours', 'Commit by', 'Score', 'Trails', 'Unique miles', 'Reachable'));
+    for (const s of adaptive.salvage) {
+      extra.push(csvRow(
+        s.budget_h.toFixed(1),
+        s.decide_by_s == null ? '' : fmtClock(s.decide_by_s),
+        fmtScore(s.score), s.trails_completed,
+        s.unique_miles.toFixed(2), s.feasible ? 'yes' : 'no',
+      ));
+    }
+  }
+
+  return [...meta.map(cells => csvRow(...cells)), '', header, ...rows, ...extra].join('\r\n');
 }
 
 function downloadCsv() {
