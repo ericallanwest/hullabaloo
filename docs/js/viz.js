@@ -385,12 +385,14 @@ function buildItinerary() {
               : s.cat === 'offtrail' ? 'road' : '';
     const done = completedAt.get(s.i);
     // The turn is precomputed in webexport.py from the unsimplified geometry — the glyph
-    // arrives ready to print, so this stays a renderer.
+    // arrives ready to print, so this stays a renderer. It sits between the step number and
+    // the trail name because that is the order the instruction is carried out: you turn,
+    // then you are on the trail.
     const turn = s.glyph
-      ? ` <span class="itin-turn" title="${esc(s.turn)}">${s.glyph}</span>` : '';
+      ? `<span class="itin-turn" title="${esc(s.turn)}">${s.glyph}</span> ` : '';
     return `<div class="itin-step" data-step="${s.i}">
       <span class="itin-n" style="color:${CAT_COLOR[s.cat]}">${s.i}.</span>
-      <b>${esc(s.name)}</b>${turn}${tag ? ` <span class="itin-tag">(${tag})</span>` : ''}
+      ${turn}<b>${esc(s.name)}</b>${tag ? ` <span class="itin-tag">(${tag})</span>` : ''}
       ${done ? ` <span class="itin-done">✓ ${done.length} trail${done.length > 1 ? 's' : ''}</span>` : ''}
       <span class="itin-meta">
         ${s.miles.toFixed(2)} mi &nbsp; ${fmtMS(s.seconds)} &nbsp; ${s.gain_ft} ft ↑ / ${s.loss_ft} ft ↓<br>
@@ -489,8 +491,30 @@ function renderPresetInfo() {
         }).join('');
     }
 
+    const flex = adaptive.flexibility || [];
+    if (flex.length) {
+      const solver = PRESET.solver || {};
+      const mark = solver.decision_point_h;
+      adaptiveBlock +=
+        `<div class="info-sub">Room left to shorten</div>` +
+        flex.map(f => {
+          const here = mark != null && Math.abs(f.at_h - mark) < 0.05;
+          const label = here ? `<b>${f.at_h.toFixed(1)} h</b>` : `${f.at_h.toFixed(1)} h`;
+          return `<div class="info-row"><span>${label}` +
+            (here ? '<span class="info-note"> — planned for</span>' : '') +
+            `</span><span><b>${f.droppable_minutes.toFixed(0)}</b>` +
+            `<span class="info-note"> min</span></span></div>`;
+        }).join('') +
+        `<span class="info-note">Minutes you could still shed if you reassess at that ` +
+        `point. Running 5% slower than modelled puts you 21 minutes over, 10% puts you 42 ` +
+        `— so this is the number that has to cover it.</span>`;
+    }
+
     const salv = adaptive.salvage || [];
     if (salv.length) {
+      // Published per row, but it is a property of the plan; any row carries it.
+      const after = salv.find(s => s.decide_after_s != null);
+      const decideAfter = after ? after.decide_after_s / 3600 : null;
       adaptiveBlock +=
         `<div class="info-sub">If you only have…</div>` +
         salv.map(s => {
@@ -502,9 +526,12 @@ function renderPresetInfo() {
             `${s.feasible ? '' : ' · not reachable'}</span></span></div>`;
         }).join('') +
         `<span class="info-note">A cut is only on offer until you reach its junction, so ` +
-        `each row shows the clock by which you have to decide. Rows are costed as whole ` +
-        `plans, never by adding the cuts above together — a trail can straddle two loops, ` +
-        `so dropping both forfeits a point neither drop loses on its own.</span>`;
+        `each row shows the clock by which you have to decide` +
+        (decideAfter ? ` — and every row is built only from cuts still ahead of you at ` +
+          `${decideAfter.toFixed(1)} h` : '') +
+        `. Rows are costed as whole plans, never by adding the cuts above together — a ` +
+        `trail can straddle two loops, so dropping both forfeits a point neither drop ` +
+        `loses on its own.</span>`;
     }
   }
 
@@ -621,7 +648,10 @@ function buildCsv() {
     }
   }
   if (adaptive && (adaptive.salvage || []).length) {
-    extra.push('', 'IF YOU ONLY HAVE (each row costed as a whole plan, not by summing cuts)');
+    const after = adaptive.salvage.find(s => s.decide_after_s != null);
+    extra.push('', 'IF YOU ONLY HAVE (each row costed as a whole plan, not by summing cuts'
+      + (after ? `; only cuts still ahead of you at ${(after.decide_after_s / 3600).toFixed(1)} h` : '')
+      + ')');
     extra.push(csvRow('Hours', 'Commit by', 'Score', 'Trails', 'Unique miles', 'Reachable'));
     for (const s of adaptive.salvage) {
       extra.push(csvRow(
@@ -769,13 +799,24 @@ function buildSpeedControls() {
 
 // Rebuilt whenever the speed changes: the labels carry each option's score at *this*
 // speed, so the cost of a commitment is visible before you click it.
+// Display order, which is not alphabetical: the two plans a racer actually chooses between
+// — the best total and the one he can adjust while running — sit together at the top, and
+// the corridor experiments follow. `a` and `d` answer "what should I run?"; `b` and `c`
+// answer "what does going west cost?", which is a different question.
+const OPTION_ORDER = ['a', 'd', 'b', 'c'];
+
 function buildOptionControls(mph) {
   const tier = tierFor(mph);
   const box = $('optionOptions');
   if (!tier) { box.innerHTML = ''; return; }
 
   const chosen = selectedOption();
-  box.innerHTML = tier.options.map(opt => {
+  const ordered = tier.options.slice().sort((x, y) => {
+    const ix = OPTION_ORDER.indexOf(x.option), iy = OPTION_ORDER.indexOf(y.option);
+    // Anything unrecognised sorts after the known plans rather than vanishing.
+    return (ix < 0 ? 99 : ix) - (iy < 0 ? 99 : iy);
+  });
+  box.innerHTML = ordered.map(opt => {
     const delta = opt.delta_vs_free == null || Math.abs(opt.delta_vs_free) < 5e-4
       ? '' : ` <span class="param-note">${opt.delta_vs_free.toFixed(1)} pts</span>`;
     return `<label title="${esc(opt.description || '')}">` +

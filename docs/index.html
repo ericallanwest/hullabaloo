@@ -5,10 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Hullabaloo Route Planner</title>
   <meta name="description" content="Step through the optimized route for the Hullabaloo 7-hour trail rogaine at Pandapas Pond, Virginia.">
-  <!-- NPS symbol-library "self-guiding trail", the same mark the Smokies planner uses.
-       Served from here rather than hotlinked off raw.githubusercontent.com, which ad and
-       privacy filters block and which rate-limits per IP. -->
-  <link rel="icon" type="image/svg+xml" href="icons/self-guiding-trail-black-22.svg">
+  <!-- Inline SVG rather than a file: an emoji glyph needs no request, cannot be blocked by
+       a privacy filter, and renders from the system font at whatever size the tab wants. -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>%F0%9F%90%BB</text></svg>">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <link rel="stylesheet" href="css/style.css"/>
 </head>
