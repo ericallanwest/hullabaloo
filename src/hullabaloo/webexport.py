@@ -641,8 +641,29 @@ def check_adaptive(document: dict) -> None:
         if not 0 <= cut["arc_start"] < cut["arc_end"]:
             raise ValueError(f"cut at hinge {cut['hinge']} has an empty or reversed span")
 
+    # Where each cut sits on the clock, so the salvage rows can be checked against it.
+    reach = {(c["arc_start"], c["arc_end"]): c["reach_s"] for c in adaptive.get("cuts", [])}
+
     previous = None
     for entry in sorted(adaptive.get("salvage", []), key=lambda s: -s["budget_s"]):
+        # A row the racer had to commit to before he could possibly know he was behind is
+        # arithmetic, not advice — and it reads as advice on the page, which is worse than
+        # publishing nothing. Checked here because the constraint lives in the search and
+        # this is the only place that sees what actually shipped.
+        after = entry.get("decide_after_s")
+        if after is not None:
+            for span in entry.get("cut_arcs", []):
+                at = reach.get(tuple(span))
+                if at is None:
+                    raise ValueError(
+                        f"salvage plan for {entry['budget_h']:.2f} h uses a cut at arcs "
+                        f"{span} that is not in the published menu"
+                    )
+                if at < after - 1e-6:
+                    raise ValueError(
+                        f"salvage plan for {entry['budget_h']:.2f} h uses a cut reached at "
+                        f"{at / 3600:.2f} h, before its {after / 3600:.2f} h decision point"
+                    )
         if entry["feasible"] and entry["time_s"] > entry["budget_s"] + 1.0:
             raise ValueError(
                 f"salvage plan for {entry['budget_h']:.2f} h is marked feasible but takes "

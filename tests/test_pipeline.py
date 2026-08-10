@@ -626,6 +626,74 @@ def test_front_load_score_is_monotone_and_bounded(net, sample_route):
     assert values[-1] == pytest.approx(final, abs=1e-3)
 
 
+def test_droppable_time_falls_as_the_clock_runs(net, sample_route):
+    """Flexibility is spent, never gained: a cut you have walked past is gone.
+
+    This is the quantity the adaptive search optimises, so its monotonicity is the property
+    that makes the objective meaningful — if it could rise, "preserve room for later" would
+    not be a coherent thing to maximise."""
+    from hullabaloo import adapt
+
+    marks = [0.0, 3600.0, 2 * 3600.0, 3.5 * 3600.0, 5 * 3600.0, sample_route.time_s + 1]
+    values = [adapt.droppable_seconds_after(sample_route, t) for t in marks]
+
+    assert values == sorted(values, reverse=True), "sheddable time cannot grow"
+    assert values[-1] == 0.0, "nothing is droppable once the route is over"
+    assert values[0] <= sample_route.time_s
+
+
+def test_droppable_time_does_not_double_count_nested_loops(net, sample_route):
+    """A loop inside a loop is not extra room — dropping the outer takes the inner too."""
+    from hullabaloo import adapt
+
+    total = adapt.droppable_seconds_after(sample_route, 0.0)
+    raw = adapt.raw_excursions(sample_route)
+    ceiling = sample_route.time_s * 0.35
+    naive = sum(e.seconds for e in raw if 120.0 <= e.seconds <= ceiling)
+
+    assert total <= naive + 1e-6
+    # And it never exceeds the route: summing nested spans easily could.
+    assert total <= sample_route.time_s + 1e-6
+
+    # The cheap path used by the search must agree with the published one on spans.
+    assert {(e.hinge, e.start, e.end) for e in raw} == {
+        (e.hinge, e.start, e.end) for e in adapt.excursions(sample_route)
+    }
+
+
+def test_salvage_only_offers_cuts_you_can_still_take(net, sample_route):
+    """A reduced-budget plan you had to commit to at minute twenty is not a bail-out.
+
+    Left to itself the salvage optimiser picks whatever is cheapest per minute, and cheap
+    loops cluster early — so without this constraint the published "if you only have 6.5
+    hours" row routinely had to be decided before the racer had any evidence he was slow.
+    """
+    from hullabaloo import adapt
+
+    decide_after = 3.5 * 3600.0
+    doc = adapt.summary(net, sample_route, decide_after_s=decide_after)
+
+    reach = {(c["arc_start"], c["arc_end"]): c["reach_s"] for c in doc["cuts"]}
+    for row in doc["salvage"]:
+        for start, end in row["cut_arcs"]:
+            assert reach[(start, end)] >= decide_after, (
+                f"{row['budget_h']} h plan uses a cut reached at "
+                f"{reach[(start, end)] / 3600:.2f} h, before the decision point"
+            )
+        if row["decide_by_s"] is not None:
+            assert row["decide_by_s"] >= decide_after
+
+    # Unfiltered is the looser problem, so it can never score worse at the same budget.
+    free = adapt.summary(net, sample_route)
+    for constrained, unconstrained in zip(doc["salvage"], free["salvage"]):
+        assert constrained["budget_s"] == unconstrained["budget_s"]
+        if constrained["feasible"] and unconstrained["feasible"]:
+            assert constrained["score"] <= unconstrained["score"] + 1e-6
+
+    # And the full menu stays unfiltered — an early cut is still worth knowing about.
+    assert len(doc["cuts"]) == len(free["cuts"])
+
+
 def test_check_adaptive_rejects_a_dishonest_menu(net, sample_route):
     """The menu is acted on twenty miles from the car with no way to verify it, so the
     claims are asserted before the file ships."""

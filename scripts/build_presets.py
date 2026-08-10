@@ -61,8 +61,23 @@ PACE_FACTORS = (1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0)
 #: The mark the adaptive plan optimises its standing score at — an hour short of the
 #: budget. Chosen because that is roughly what being 15% slower than modelled costs you,
 #: which is the failure the adaptive plan exists to absorb; optimising at, say, three hours
-#: would tune for a scenario in which nothing has gone wrong yet.
+#: would tune for a scenario in which nothing has gone wrong yet. Now a tie-break behind
+#: :data:`FLEX_AT_S`.
 FRONT_LOAD_AT_S = 6 * 3600.0
+
+#: The clock the adaptive plan preserves its flexibility for — the primary objective.
+#:
+#: Half distance, which is both when a pace estimate stops being noise and, on this network,
+#: the last point at which shedding time is still possible. Measured across the published
+#: plans, sheddable minutes collapse between hour four and hour four and a half (at 6.0 mph,
+#: 38 minutes to 11; at 6.5, 34 to 7), so a decision taken much past four has nothing left
+#: to act on. 3.5 h leaves a margin before that cliff.
+#:
+#: The quantity to compare it against: a racer running a fraction ``s`` slower than modelled
+#: overruns by ``budget * s`` no matter when he notices, because the whole route scales
+#: together — 21 minutes at 5% slow, 42 at 10%. So the plan needs at least that much still
+#: droppable at this mark to be recoverable.
+FLEX_AT_S = 3.5 * 3600.0
 
 
 def rule_for(net, option: str):
@@ -118,25 +133,37 @@ def solve_adaptive(
     net = build_network(timed, nodes)
     floor = optimum - webexport.ADAPTIVE_GAP_BUDGET
 
+    chains = build_trail_chains(net)
     best = None
     for seed in range(alns_seeds):
+        # Two phases, because the flexibility objective cannot find its own way into the
+        # admissible band. The constructive starts only reach the low 40s at this speed —
+        # below the floor — and room to shorten is cheapest to buy by *not* scoring, so a
+        # search launched from there happily wanders further down and never visits a
+        # publishable route at all. Scoring is what a plain run is good at: let it supply
+        # the anchor, then trade score for room from a position that already clears the bar.
+        warm = ALNS(net, chains, seed=seed).solve(iterations=max(1, alns_iterations // 2))
         result = ALNS(
             net,
-            build_trail_chains(net),
+            chains,
             seed=seed,
             front_load_s=FRONT_LOAD_AT_S,
             score_floor=floor,
-        ).solve(iterations=alns_iterations)
+            flex_at_s=FLEX_AT_S,
+        ).solve(iterations=alns_iterations, seed_order=warm.order)
+        flexible = adapt.droppable_seconds_after(result.route, FLEX_AT_S) / 60.0
         banked = adapt.front_load_score(result.route, FRONT_LOAD_AT_S)
         log.info(
-            "  %s | ALNS seed %d: final %.3f, banked by %.1f h %.3f%s",
-            tag, seed, result.raw_score, FRONT_LOAD_AT_S / 3600, banked,
+            "  %s | ALNS seed %d: final %.3f, %.0f min droppable at %.1f h, banked %.3f%s",
+            tag, seed, result.raw_score, flexible, FLEX_AT_S / 3600, banked,
             "" if result.raw_score >= floor else "  BELOW FLOOR",
         )
         if result.raw_score < floor:
             continue
-        if best is None or banked > best[1]:
-            best = (result, banked)
+        # Ranked the same way the search scored: flexibility first, banking as tie-break.
+        key = (flexible, banked)
+        if best is None or key > (best[1], best[2]):
+            best = (result, flexible, banked)
 
     if best is None:
         raise SystemExit(
@@ -144,7 +171,7 @@ def solve_adaptive(
             f"{optimum:.3f} optimum; raise --alns-iterations or the gap budget"
         )
 
-    result, banked = best
+    result, flexible, banked = best
     route = result.route
     problems = route.validate()
     if problems:
@@ -156,6 +183,8 @@ def solve_adaptive(
         "incumbent": round(result.raw_score, 3),
         "optimum": round(optimum, 3),
         "gap_pct": round(100 * (optimum - result.raw_score) / optimum, 2),
+        "decision_point_h": round(FLEX_AT_S / 3600, 2),
+        "droppable_minutes_at_decision": round(flexible, 1),
         "banked_by_front_load_h": round(FRONT_LOAD_AT_S / 3600, 2),
         "banked_score": round(banked, 3),
     }
@@ -324,7 +353,11 @@ def build_speed_tiers(speeds, options, ctx, args) -> list[dict]:
             if option == "a":
                 free_score = summary["score"]
 
-            adaptive = adapt.summary(net, route) if option == "d" else None
+            adaptive = (
+                adapt.summary(net, route, decide_after_s=FLEX_AT_S)
+                if option == "d"
+                else None
+            )
             if adaptive is not None:
                 log.info(
                     "  %s | %d cuts, %.0f droppable minutes, %.3f banked by %.0f h",

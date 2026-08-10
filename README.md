@@ -139,6 +139,44 @@ the arcs after it begin, so what remains is still one closed walk from the start
 it. No re-solve, no chance of stranding the route on the far side of the property. A typical
 route offers around nine of these, worth roughly two hours of droppable time in total.
 
+#### What plan d is actually searched for
+
+Having a menu is not the same as having a *useful* menu. A route can carry two hours of
+droppable loops and still be useless to a racer if every one of them is behind him by the
+time he knows he is behind. So the objective is not droppable time, but **droppable time
+still ahead of you at 3.5 hours** — the halfway mark, where a racer first has enough
+evidence to judge his own pace and still enough day left to act on it:
+
+```
+maximise   droppable minutes reachable after hour 3.5
+subject to final score >= proven optimum - 3.0
+```
+
+Only *maximal* excursions count, since excursions nest and dropping the outer one already
+drops the inner. The MILP cannot express this — it chooses a set of arcs and the walk order
+falls out of a Hierholzer pass afterwards — so the ALNS does the searching while the MILP
+supplies the ceiling the floor is measured against.
+
+The search needs a running start. Constructive starts at 5.0 mph reach 42.07 and 37.01,
+both *below* the 45.11 floor, and the cheapest way to buy room to shorten is to not score —
+so a search launched from there wanders further down and never visits a publishable route
+at all. Plan d is therefore solved in two phases: a plain score-seeking run supplies an
+anchor above the floor, then the flexibility run trades score for room from there.
+
+What it buys, in droppable minutes at 3.5 h, against the front-loading objective it replaced:
+
+| Top speed | before | after |
+|---|---:|---:|
+| 5.0 mph | 18 | 106 |
+| 5.5 mph | 12 | 144 |
+| 6.0 mph | 38 | 140 |
+| 6.5 mph | 34 | 152 |
+| 7.0 mph | 130 | 160 |
+| 7.5 mph | 6 | 123 |
+
+The two tiers that mattered most are the two that had nothing: at 5.0 and 5.5 mph a racer
+who fell 5% behind previously had no affordable way to recover.
+
 Two things about the menu are worth stating plainly, because both are easy to get wrong:
 
 **The costs do not add up.** Scoring is over the *set* of edges walked and a trail scores
@@ -151,6 +189,13 @@ therefore costed as a whole, never by summing the singles.
 the clock is before X" works out to the planned arrival time at that junction. Hit the
 junction on schedule and the loop is affordable; arrive late and it is not, by exactly the
 margin you are late.
+
+The same reasoning constrains the reduced-budget table. A cut is only on offer until you
+reach its junction, so the "if you only have 6.5 hours" rows are built solely from cuts
+still ahead of the 3.5-hour decision point. Left unconstrained the optimiser reliably picks
+whatever is cheapest per minute, which tends to sit early: before this was enforced, five of
+the six tiers published a 6.5-hour plan that had to be committed to within the first half
+hour — correct arithmetic, useless advice.
 
 Folded away below them is the older **pace sweep**, eleven itineraries from 1.0 (textbook
 Tobler) to 2.0. It answers a modelling question rather than a racing one: pace is the one

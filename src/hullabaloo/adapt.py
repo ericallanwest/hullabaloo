@@ -119,13 +119,12 @@ class SalvageSet:
 # --------------------------------------------------------------------------------------
 
 
-def excursions(route: Route) -> list[Excursion]:
-    """Every contiguous closed excursion in the walk, innermost first.
+def raw_excursions(route: Route) -> list[Excursion]:
+    """The excursion spans alone, without working out which contains which.
 
-    One pass with a stack of nodes on the current path. Revisiting a node that is already on
-    the stack closes an excursion; everything after that node is unwound, which is exactly
-    what makes the returned spans contiguous. Nesting is recovered afterwards by span
-    containment, since an excursion is closed before its parent ever is.
+    Split from :func:`excursions` because linking parents is O(n^2) over the excursions and
+    the search objective does not need it — only publishing does. That loop ran on every
+    ALNS decode and roughly doubled the cost of scoring a candidate.
     """
     arcs = route.arcs
     if not arcs:
@@ -165,6 +164,19 @@ def excursions(route: Route) -> list[Excursion]:
                 miles=sum(a.score_mi for a in arcs[start:end]),
             )
         )
+
+    return result
+
+
+def excursions(route: Route) -> list[Excursion]:
+    """Every contiguous closed excursion in the walk, with nesting resolved.
+
+    One pass with a stack of nodes on the current path. Revisiting a node already on the
+    stack closes an excursion; everything after that node is unwound, which is exactly what
+    makes the returned spans contiguous. Nesting is recovered afterwards by span
+    containment, since an excursion is always closed before its parent is.
+    """
+    result = raw_excursions(route)
 
     # Parent = the tightest excursion strictly containing this one. Computed for every
     # excursion before any depth is, because a depth is a walk up the parent chain and a
@@ -459,6 +471,44 @@ def bailout_curve(net: Network, route: Route, race: RaceParams | None = None) ->
     return curve
 
 
+def droppable_seconds_after(
+    route: Route,
+    at_s: float,
+    *,
+    min_seconds: float = 120.0,
+    max_fraction: float = 0.35,
+) -> float:
+    """How much time is still sheddable once the clock passes ``at_s``.
+
+    The measure of a plan's *remaining* flexibility, and the thing worth optimising: a cut
+    is only on offer until you reach its junction, so a menu that is all spent by hour four
+    is no use to a racer who works out at hour four that he is behind.
+
+    Deliberately does no scoring. :func:`cuts` re-scores the whole walk once per excursion
+    to price it exactly, which is right when publishing a menu and far too slow to run on
+    every ALNS decode. Here only the time matters, and time is a sum over arcs.
+
+    Nested excursions are counted once. A loop inside a loop is not extra sheddable time —
+    dropping the outer one already takes the inner with it — so only excursions with no
+    eligible ancestor contribute.
+    """
+    ceiling = route.time_s * max_fraction
+    elapsed = [0.0]
+    for arc in route.arcs:
+        elapsed.append(elapsed[-1] + arc.time_s)
+
+    eligible = [
+        e
+        for e in raw_excursions(route)
+        if min_seconds <= e.seconds <= ceiling and elapsed[e.start] >= at_s
+    ]
+    return sum(
+        e.seconds
+        for e in eligible
+        if not any(o is not e and o.contains(e) for o in eligible)
+    )
+
+
 def front_load_score(route: Route, at_s: float, race: RaceParams | None = None) -> float:
     """Score standing after ``at_s`` seconds of the walk — the front-loading measure.
 
@@ -486,8 +536,16 @@ def summary(
     *,
     min_seconds: float = 120.0,
     max_fraction: float = 0.35,
+    decide_after_s: float | None = None,
 ) -> dict:
-    """Everything the page and the cue sheet need, in one pass."""
+    """Everything the page and the cue sheet need, in one pass.
+
+    ``decide_after_s`` is the hour at which the athlete is expected to judge his pace. The
+    salvage table is built only from cuts he can still take at that point: a reduced-budget
+    plan whose cheapest route out was a turning back in the first half-hour is arithmetic,
+    not advice. The full ``cuts`` menu is unfiltered — an early cut is still worth publishing
+    for anyone who knows at the start line that he wants a shorter day.
+    """
     race = race or route.race or CONFIG.race
     budget = float(race.time_budget_s)
     priced = cuts(net, route, race, min_seconds=min_seconds, max_fraction=max_fraction)
@@ -498,10 +556,15 @@ def summary(
     for arc in route.arcs:
         elapsed.append(elapsed[-1] + arc.time_s)
 
+    if decide_after_s is None:
+        still_open = priced
+    else:
+        still_open = [c for c in priced if elapsed[c.excursion.start] >= decide_after_s]
+
     salvages = []
     for fraction in SALVAGE_FRACTIONS:
         target = budget * fraction
-        best = salvage(net, route, target, priced, race)
+        best = salvage(net, route, target, still_open, race)
         # A cut can only be taken if you have not already walked past its junction, so a
         # plan is only usable if you commit to it before the *earliest* of its cuts. Without
         # this the table quietly implies that a racer who realises at hour five that he is
@@ -517,6 +580,7 @@ def summary(
                 "time_s": round(best.seconds, 1),
                 "feasible": best.feasible,
                 "decide_by_s": round(min(reach), 1) if reach else None,
+                "decide_after_s": round(decide_after_s, 1) if decide_after_s else None,
                 "cut_hinges": [c.excursion.hinge for c in best.cuts],
                 "cut_arcs": [[c.excursion.start, c.excursion.end] for c in best.cuts],
             }
@@ -546,4 +610,21 @@ def summary(
             "score_at_6h": round(front_load_score(route, 6 * 3600.0, race), 3),
             "score_at_5h": round(front_load_score(route, 5 * 3600.0, race), 3),
         },
+        # How much room is left at each point a racer might reassess. The 3.5 h figure is
+        # what the adaptive search optimises; the rest is here so the cliff is visible
+        # rather than asserted — on this network the sheddable time falls off sharply
+        # somewhere past four hours, and that is the fact a decision point has to respect.
+        "flexibility": [
+            {
+                "at_h": round(mark / 3600.0, 1),
+                "droppable_minutes": round(
+                    droppable_seconds_after(
+                        route, mark, min_seconds=min_seconds, max_fraction=max_fraction
+                    )
+                    / 60.0,
+                    1,
+                ),
+            }
+            for mark in (2.5 * 3600, 3.0 * 3600, 3.5 * 3600, 4.0 * 3600, 4.5 * 3600)
+        ],
     }

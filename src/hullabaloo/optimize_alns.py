@@ -34,7 +34,7 @@ import math
 import random
 from dataclasses import dataclass, field
 
-from .adapt import front_load_score
+from .adapt import droppable_seconds_after, front_load_score
 from .config import CONFIG, RaceParams
 from .corridors import CorridorRule
 from .graph import Arc, Network, Route, score_edges
@@ -273,6 +273,7 @@ class ALNS:
         rule: CorridorRule | None = None,
         front_load_s: float | None = None,
         score_floor: float | None = None,
+        flex_at_s: float | None = None,
     ) -> None:
         self.net = net
         self.race = race or CONFIG.race
@@ -284,6 +285,11 @@ class ALNS:
         # an ALNS solution *is* a visit order, so front-loading is native here.
         self.front_load_s = front_load_s
         self.score_floor = score_floor
+        # Flexibility mode: score by how much is still sheddable after ``flex_at_s`` rather
+        # than by how much has been banked. The two are not the same goal — banking early
+        # helps a racer who has to stop, whereas sheddable time helps one who only has to
+        # trim — and it is the second that a mid-race decision actually needs.
+        self.flex_at_s = flex_at_s
 
         chains = chains if chains is not None else build_trail_chains(net)
         # A forbidden trail is removed from the candidate pool outright, so the search
@@ -312,8 +318,22 @@ class ALNS:
 
     # -- scoring -----------------------------------------------------------------------
 
+    def _admissible(self, score: float) -> bool:
+        """Whether a route scoring this much is allowed to be published at all."""
+        return self.score_floor is None or score >= self.score_floor
+
     def _score(self, order: list[int]) -> float:
-        """Decode a visit order and score it, net of any penalty.
+        """The search objective for a visit order. See :meth:`_objective_and_score`."""
+        return self._objective_and_score(order)[0]
+
+    def _objective_and_score(self, order: list[int]) -> tuple[float, float]:
+        """Decode a visit order and return ``(search objective, race score)``.
+
+        The two differ under every mode except the plain one, and the difference matters at
+        the end of the search: the objective is what the annealing compares, but the race
+        score is what decides whether a route may be published at all. Returning both lets
+        :meth:`solve` keep the best *admissible* solution it saw rather than the best
+        objective, which can be a route that bought its flexibility below the score floor.
 
         Every operator and the acceptance test go through here, so the rules are applied
         once, in one place, and cannot be forgotten by a code path that scores a candidate
@@ -326,15 +346,26 @@ class ALNS:
         if not self.rule.is_free:
             penalty += RULE_PENALTY * self.rule.violation_count(self.net, route)
 
-        if self.front_load_s is None:
-            return score - penalty
+        if self.front_load_s is None and self.flex_at_s is None:
+            return score - penalty, score
 
         # Falling below the floor is charged in proportion to the shortfall rather than
         # flatly: a route two points short and a route twenty points short are not equally
         # wrong, and a flat penalty gives the search no gradient back into the feasible band.
         if self.score_floor is not None and score < self.score_floor:
             penalty += RULE_PENALTY * (self.score_floor - score)
-        return front_load_score(route, self.front_load_s, self.race) - penalty
+
+        if self.flex_at_s is None:
+            return front_load_score(route, self.front_load_s, self.race) - penalty, score
+
+        # Minutes still sheddable, with banked score as a tie-break. The scale gap is
+        # deliberate: two routes that leave the same flexibility should be separated by how
+        # much they have banked, but no amount of banking should buy away a minute of the
+        # room the plan exists to preserve.
+        objective = droppable_seconds_after(route, self.flex_at_s) / 60.0
+        if self.front_load_s is not None:
+            objective += front_load_score(route, self.front_load_s, self.race) / 1000.0
+        return objective - penalty, score
 
     def decode_order(self, order: list[int]) -> Route:
         """The concrete walk an order expands to. Public so callers can re-check the rule."""
@@ -496,7 +527,14 @@ class ALNS:
                 rest = [t for t in order if t not in self.rule.require]
                 candidates.append(required + rest)
 
-        return max(candidates, key=self._score)
+        # Start somewhere publishable when a floor is set. Under the flexibility objective
+        # the highest-objective construction is often one that scores below the floor —
+        # room to shorten is cheapest to buy by not scoring — and starting there let the
+        # whole search run without ever visiting an admissible solution, so nothing shippable
+        # came back. Scoring is what the constructions are good at; let them supply the
+        # feasible anchor and let the search trade from there.
+        admissible = [o for o in candidates if self._admissible(self._objective_and_score(o)[1])]
+        return max(admissible or candidates, key=self._score)
 
     def solve(
         self,
@@ -507,8 +545,18 @@ class ALNS:
         seed_order: list[int] | None = None,
     ) -> ALNSResult:
         current = seed_order[:] if seed_order else self._best_start()
-        current_score = self._score(current)
+        current_score, current_raw = self._objective_and_score(current)
         best, best_score = current[:], current_score
+
+        # Tracked separately from ``best``, which is the best *objective*. Under the
+        # flexibility objective those come apart: room to shorten is easiest to find just
+        # below the score floor, so the best-objective route can be one that is not
+        # publishable at all. Keeping the best admissible route seen means the search can
+        # explore across the floor — which it needs to, to find anything good — without the
+        # run ending on a solution it is not allowed to ship.
+        admissible, admissible_score = None, None
+        if self._admissible(current_raw):
+            admissible, admissible_score = current[:], current_score
 
         temp = initial_temp
         history = [(0, best_score)]
@@ -519,7 +567,11 @@ class ALNS:
             k = self.rng.randint(1, max(2, len(current) // 3))
 
             candidate = self.repair_ops[r_idx](self.destroy_ops[d_idx](current, k))
-            cand_score = self._score(candidate)
+            cand_score, cand_raw = self._objective_and_score(candidate)
+            if self._admissible(cand_raw) and (
+                admissible_score is None or cand_score > admissible_score
+            ):
+                admissible, admissible_score = candidate[:], cand_score
 
             reward = 0.0
             if cand_score > best_score + 1e-9:
@@ -542,6 +594,12 @@ class ALNS:
             if it % 25 == 0:
                 history.append((it, best_score))
                 log.debug("iter %d best=%.2f temp=%.3f", it, best_score, temp)
+
+        # Ship the best admissible solution when one was found; the best objective only
+        # when no constraint was set, or when nothing admissible ever turned up (in which
+        # case the caller still gets the violations and can reject it).
+        if admissible is not None:
+            best, best_score = admissible, admissible_score
 
         route = decode(best, self.net, self.chains, self.race)
         history.append((iterations, best_score))
