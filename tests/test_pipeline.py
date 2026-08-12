@@ -728,6 +728,56 @@ def test_check_adaptive_rejects_a_dishonest_menu(net, sample_route):
         webexport.check_preset(overspent)
 
 
+def test_every_cut_names_steps_the_racer_can_actually_find(net, sample_route):
+    """A cut he cannot be pointed at is a cut he cannot take.
+
+    The menu used to identify each loop by its internal junction id — a number printed
+    nowhere else on the page, not on the map, not in the itinerary, not in the CSV. Worse,
+    it was ambiguous: the same junction is passed twice on a braided network, and one loop
+    hinged at a node the step grouping had swallowed mid-leg, so it could not be referred to
+    at all. Every cut must now land on whole steps that begin and end at its own hinge.
+    """
+    from hullabaloo import adapt, webexport
+
+    document = webexport.preset_dict(
+        net,
+        sample_route,
+        pace_factor=CONFIG.tobler.pace_factor,
+        option="d",
+        adaptive=adapt.summary(net, sample_route),
+        free_score=sample_route.evaluate()["score"],
+    )
+    steps = document["steps"]
+    cuts = document["adaptive"]["cuts"]
+    assert cuts, "the fixture route must offer at least one cut for this to mean anything"
+
+    seen = set()
+    for cut in cuts:
+        first, last = cut["step_start"], cut["step_end"]
+        assert 1 <= first <= last <= len(steps)
+        # The range names the same ground the price was computed from: you leave the route
+        # at the hinge and you are back on it at the hinge.
+        assert steps[first - 1]["from_node"] == cut["hinge"]
+        assert steps[last - 1]["to_node"] == cut["hinge"]
+        # Two cuts sharing a junction were indistinguishable under the old label; step
+        # ranges cannot collide, because a span of the walk belongs to one excursion.
+        assert (first, last) not in seen, "two cuts published under the same step range"
+        seen.add((first, last))
+
+    # And the salvage plans point at the same steps as the menu they are drawn from.
+    spans = {(c["arc_start"], c["arc_end"]): (c["step_start"], c["step_end"]) for c in cuts}
+    for row in document["adaptive"]["salvage"]:
+        for arcs, published in zip(row["cut_arcs"], row["cut_steps"]):
+            assert tuple(published) == spans[tuple(arcs)]
+
+    # Breaking a range must be caught before it ships, not read as advice on the page.
+    if len(steps) > cuts[0]["step_end"]:
+        misplaced = copy.deepcopy(document)
+        misplaced["adaptive"]["cuts"][0]["step_end"] += 1
+        with pytest.raises(ValueError, match="leave the route somewhere other"):
+            webexport.check_preset(misplaced)
+
+
 def test_corridor_rule_detects_both_kinds_of_violation(net, sample_route):
     """The rule must catch a route that breaks it — this is the only thing standing
     between a mislabelled option and the page."""

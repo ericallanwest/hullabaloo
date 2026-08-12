@@ -62,7 +62,10 @@ COORD_DECIMALS = 5
 #: 2 added per-step turn cues (``turn``, ``turn_deg``, ``glyph``).
 #: 3 added speed branding (``speed_mph``, ``option``) and the corridor blocks.
 #: 4 added the ``adaptive`` block — priced cuts, salvage sets and the bail-out curve.
-SCHEMA_VERSION = 4
+#: 5 pinned each cut to the steps it covers (``step_start``, ``step_end``, ``cut_steps``)
+#:   and named the trails it forfeits, so the menu can be written in the itinerary's own
+#:   numbering instead of internal junction ids.
+SCHEMA_VERSION = 5
 
 #: Schema version each block of fields arrived in. A preset is required to be new enough
 #: for the fields it actually carries, rather than new enough to be the latest: the versions
@@ -71,6 +74,7 @@ SCHEMA_VERSION = 4
 #: gain keys they do not use.
 SCHEMA_WITH_OPTIONS = 3
 SCHEMA_WITH_ADAPTIVE = 4
+SCHEMA_WITH_CUT_STEPS = 5
 
 #: Oldest schema the page and the validator still read.
 #:
@@ -168,6 +172,48 @@ def _trails_completed(net: Network, route: Route, arc_to_leg: list[int]) -> list
     )
 
 
+def _cut_boundaries(adaptive: dict | None, n_arcs: int) -> set[int]:
+    """Arc indices where a published cut leaves the route or rejoins it."""
+    if not adaptive:
+        return set()
+    edges: set[int] = set()
+    for cut in adaptive.get("cuts", []):
+        edges.add(int(cut["arc_start"]))
+        edges.add(int(cut["arc_end"]))
+    # ``arc_end`` is exclusive, so on the last cut it can point one past the walk.
+    return {i for i in edges if 0 < i < n_arcs}
+
+
+def _locate_cuts(adaptive: dict | None, arc_to_leg: list[int]) -> dict | None:
+    """Re-publish the adaptive block with every cut pinned to the steps it covers.
+
+    The menu is computed over arcs, which is the right unit for pricing and the wrong one
+    for instructing anybody: the racer has a numbered itinerary in his hand, not an arc
+    list. Because :func:`_cut_boundaries` forced a step boundary at both ends of every cut,
+    each one now lands exactly on a run of whole steps, and "skip steps 49–56" names the
+    same ground the price was computed from.
+    """
+    if not adaptive:
+        return adaptive
+
+    def span(arc_start: int, arc_end: int) -> tuple[int, int]:
+        # Steps are 1-based on the page; ``arc_end`` is exclusive, so the last arc inside
+        # the cut is the one before it.
+        return arc_to_leg[int(arc_start)] + 1, arc_to_leg[int(arc_end) - 1] + 1
+
+    def located_cut(cut: dict) -> dict:
+        first, last = span(cut["arc_start"], cut["arc_end"])
+        return {**cut, "step_start": first, "step_end": last}
+
+    located = dict(adaptive)
+    located["cuts"] = [located_cut(cut) for cut in adaptive.get("cuts", [])]
+    located["salvage"] = [
+        {**entry, "cut_steps": [list(span(a, b)) for a, b in entry.get("cut_arcs", [])]}
+        for entry in adaptive.get("salvage", [])
+    ]
+    return located
+
+
 def preset_dict(
     net: Network,
     route: Route,
@@ -193,7 +239,12 @@ def preset_dict(
     if detail.empty:
         raise ValueError("cannot export an empty route")
 
-    legs = _group_arcs(detail, lambda row: (leg_label(row), row.cat))
+    # An adaptive plan's cuts have to be nameable in the itinerary, so every cut boundary
+    # forces a step boundary. Without this a loop can leave the route halfway through a
+    # merged leg, and the only handle left for the sidebar is the internal junction id —
+    # a number that appears nowhere else on the page and that the racer cannot act on.
+    breaks = _cut_boundaries(adaptive, len(route.arcs))
+    legs = _group_arcs(detail, lambda row: (leg_label(row), row.cat), breaks)
 
     # Which leg each arc landed in, so trail completions can name a step number.
     arc_to_leg = [0] * len(route.arcs)
@@ -300,7 +351,7 @@ def preset_dict(
         "option": option,
         "option_label": label,
         "option_description": description,
-        "adaptive": adaptive,
+        "adaptive": _locate_cuts(adaptive, arc_to_leg),
         "corridor_rule": rule.as_dict(),
         "corridors": corridor_breakdown(net, route),
         # How much this alternative gave up against the free optimum at the same speed.
@@ -602,6 +653,38 @@ def check_preset(
     check_adaptive(document)
 
 
+def _check_cut_steps(document: dict, cut: dict) -> None:
+    """The step range on a cut must name exactly the loop that was priced.
+
+    This is the check that makes the menu usable rather than merely correct. The sidebar
+    tells a racer to skip steps 49 through 56; if that range began or ended anywhere but the
+    junction the loop hinges on, he would walk off the route at the wrong place and the
+    published price — minutes, miles, points — would be for ground he is not skipping. The
+    itinerary's own numbering is the only handle he has out there, so it is checked against
+    the arc span the price came from before the file ships.
+    """
+    first, last = cut.get("step_start"), cut.get("step_end")
+    if first is None or last is None:
+        # Predates schema 5; the page falls back to naming the junction.
+        return
+
+    steps = document["steps"]
+    if not 1 <= first <= last <= len(steps):
+        raise ValueError(
+            f"cut at hinge {cut['hinge']} claims steps {first}–{last}, outside the "
+            f"{len(steps)}-step itinerary"
+        )
+
+    hinge = cut["hinge"]
+    leaves, rejoins = steps[first - 1]["from_node"], steps[last - 1]["to_node"]
+    if leaves != hinge or rejoins != hinge:
+        raise ValueError(
+            f"cut at hinge {cut['hinge']} is published as steps {first}–{last}, which run "
+            f"from node {leaves} to node {rejoins} — a racer skipping those steps would "
+            "leave the route somewhere other than where the cut was priced"
+        )
+
+
 def check_adaptive(document: dict) -> None:
     """An adaptive plan's menu has to be internally honest.
 
@@ -640,6 +723,7 @@ def check_adaptive(document: dict) -> None:
             raise ValueError(f"cut at hinge {cut['hinge']} saves no time")
         if not 0 <= cut["arc_start"] < cut["arc_end"]:
             raise ValueError(f"cut at hinge {cut['hinge']} has an empty or reversed span")
+        _check_cut_steps(document, cut)
 
     # Where each cut sits on the clock, so the salvage rows can be checked against it.
     reach = {(c["arc_start"], c["arc_end"]): c["reach_s"] for c in adaptive.get("cuts", [])}
@@ -721,6 +805,12 @@ def check_corridor_rule(
         raise ValueError(
             f"preset carries an adaptive block but is schema {version}; that block "
             f"arrived in schema {SCHEMA_WITH_ADAPTIVE}"
+        )
+    cuts = (document.get("adaptive") or {}).get("cuts", [])
+    if any("step_start" in cut for cut in cuts) and version < SCHEMA_WITH_CUT_STEPS:
+        raise ValueError(
+            f"preset pins its cuts to steps but is schema {version}; those fields "
+            f"arrived in schema {SCHEMA_WITH_CUT_STEPS}"
         )
 
     declared = document.get("corridor_rule") or {}

@@ -40,7 +40,7 @@ on the actual remaining edge set, never summed. Every function here re-scores; n
 from __future__ import annotations
 
 import itertools
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .config import CONFIG, M_PER_MILE, RaceParams
 from .graph import Network, Route, score_edges
@@ -93,6 +93,10 @@ class Cut:
     #: Latest elapsed seconds at the hinge for which *keeping* this excursion still finishes
     #: inside the budget. ``None`` when keeping it is always affordable.
     keep_before_s: float | None = None
+    #: Which scored trails stop being complete if this cut is taken. A count alone cannot be
+    #: checked against the route on the page; names can, and they are what the racer is
+    #: actually weighing when he decides whether the loop is worth the minutes.
+    trail_ids_lost: tuple[int, ...] = ()
 
     @property
     def points_per_minute(self) -> float:
@@ -237,6 +241,16 @@ def _evaluate(net: Network, arcs, race: RaceParams) -> tuple[float, float, int]:
     return score_edges({a.edge_id for a in arcs}, net, race)
 
 
+def _completed(net: Network, arcs) -> set[int]:
+    """Which scored trails a set of arcs finishes.
+
+    The same membership test :func:`~hullabaloo.graph.score_edges` counts, kept as a set so a
+    cut can say *which* trails it forfeits rather than only how many.
+    """
+    used = {a.edge_id for a in arcs}
+    return {int(tid) for tid, edges in net.trail_edges.items() if edges <= used}
+
+
 def cuts(
     net: Network,
     route: Route,
@@ -258,7 +272,8 @@ def cuts(
     amount of arithmetic on the excursion's own miles gets this right.
     """
     race = race or route.race or CONFIG.race
-    base_score, _, base_trails = _evaluate(net, route.arcs, race)
+    base_score, _, _ = _evaluate(net, route.arcs, race)
+    base_done = _completed(net, route.arcs)
     ceiling = route.time_s * max_fraction
 
     priced: list[Cut] = []
@@ -266,14 +281,18 @@ def cuts(
         if not min_seconds <= excursion.seconds <= ceiling:
             continue
         remaining = drop(route, [(excursion.start, excursion.end)])
-        score, unique_mi, trails = _evaluate(net, remaining.arcs, race)
+        score, _, _ = _evaluate(net, remaining.arcs, race)
+        # Dropping arcs can only shrink the completed set, so the difference is the list of
+        # trails given up — the count comes from it rather than from subtracting two totals.
+        lost = base_done - _completed(net, remaining.arcs)
         priced.append(
             Cut(
                 excursion=excursion,
                 seconds_saved=route.time_s - remaining.time_s,
                 miles_saved=sum(a.score_mi for a in route.arcs[excursion.start : excursion.end]),
                 points_lost=round(base_score - score, 6),
-                trails_lost=base_trails - trails,
+                trails_lost=len(lost),
+                trail_ids_lost=tuple(sorted(lost)),
             )
         )
 
@@ -311,14 +330,7 @@ def _with_thresholds(route: Route, priced: list[Cut], race: RaceParams) -> list[
         after = total - elapsed[excursion.end]
         latest = budget - (excursion.seconds + after)
         out.append(
-            Cut(
-                excursion=excursion,
-                seconds_saved=cut.seconds_saved,
-                miles_saved=cut.miles_saved,
-                points_lost=cut.points_lost,
-                trails_lost=cut.trails_lost,
-                keep_before_s=None if latest >= total else max(0.0, latest),
-            )
+            replace(cut, keep_before_s=None if latest >= total else max(0.0, latest))
         )
     return out
 
@@ -600,6 +612,7 @@ def summary(
                 "miles_saved": round(c.miles_saved, 3),
                 "points_lost": round(c.points_lost, 3),
                 "trails_lost": c.trails_lost,
+                "trail_ids_lost": list(c.trail_ids_lost),
                 "points_per_minute": round(c.points_per_minute, 4),
                 "keep_before_s": None if c.keep_before_s is None else round(c.keep_before_s, 1),
             }
