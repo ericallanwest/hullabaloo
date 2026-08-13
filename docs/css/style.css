@@ -127,6 +127,9 @@ body.sidebar-hidden #sidebar-toggle { right: 0; }
   letter-spacing: .06em; color: var(--accent);
 }
 #presetInfo .info-row .info-note { display: inline; margin-top: 0; }
+/* The cut rows carry a tooltip and drive the itinerary highlight, so they read as live. */
+#presetInfo .cut-row { cursor: help; }
+#presetInfo .cut-row:hover { background: var(--active-bg); }
 #presetError { margin-top: 8px; font-size: 11px; color: var(--accent); display: none; }
 /* Shown when a scoring cap binds: the route is valid but the optimality claim is not. */
 .caveat {
@@ -168,6 +171,9 @@ body.sidebar-hidden #sidebar-toggle { right: 0; }
 .itin-step   { padding: 3px 4px 3px 6px; border-radius: 3px; cursor: pointer; border-left: 3px solid transparent; scroll-margin-top: 250px; }
 .itin-step:hover  { background: var(--bg); }
 .itin-step.active { background: var(--active-bg); border-left: 3px solid #FFD700; }
+/* Hovering a cut in the left sidebar marks the steps it would remove. Accent-coloured
+   rather than gold: this is the ground you are considering giving up, not where you are. */
+.itin-step.in-cut { border-left: 3px solid var(--accent); opacity: .55; }
 .itin-step .itin-n    { font-weight: 700; }
 /* The turn arrow is the one glyph in this list a racer reads at speed, so it gets a size
    of its own rather than inheriting the 11px the rest of the row is set in. */

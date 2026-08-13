@@ -18,7 +18,7 @@ import math
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, NamedTuple
+from typing import Callable, Iterable, NamedTuple
 from xml.etree import ElementTree as ET
 
 import geopandas as gpd
@@ -182,7 +182,11 @@ def leg_label(row) -> str:
     return row.name
 
 
-def _group_arcs(detail: pd.DataFrame, key_fn: Callable[[object], object]) -> list[dict]:
+def _group_arcs(
+    detail: pd.DataFrame,
+    key_fn: Callable[[object], object],
+    breaks: Iterable[int] = (),
+) -> list[dict]:
     """Collapse runs of consecutive arcs sharing a key into legs.
 
     ``key_fn(row)`` decides what counts as one leg. The cue sheet keys on the printed
@@ -190,11 +194,19 @@ def _group_arcs(detail: pd.DataFrame, key_fn: Callable[[object], object]) -> lis
     web export additionally keys on traversal category, because a first pass and an
     immediately following repeat of the same trail must stay separate rows rather than
     merging into one leg that means two different things at once.
+
+    ``breaks`` names arc indices that must begin a leg whatever the key says. An adaptive
+    plan passes the ends of every cut it publishes, because a cut the racer cannot be
+    pointed at is a cut he cannot take: if the junction where a loop leaves the route falls
+    halfway through a merged leg, no step number on the page or the printed sheet refers to
+    it. Arc indices rather than junction nodes, because the same junction is often passed
+    more than once in a day and only one of those passes is the decision.
     """
+    at_break = frozenset(int(i) for i in breaks)
     legs: list[dict] = []
     for i, row in enumerate(detail.itertuples(index=False)):
         key = key_fn(row)
-        if legs and legs[-1]["key"] == key:
+        if legs and legs[-1]["key"] == key and i not in at_break:
             leg = legs[-1]
             leg["time_s"] += row.time_s
             leg["length_m"] += row.length_m

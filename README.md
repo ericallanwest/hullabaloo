@@ -197,6 +197,19 @@ whatever is cheapest per minute, which tends to sit early: before this was enfor
 the six tiers published a 6.5-hour plan that had to be committed to within the first half
 hour — correct arithmetic, useless advice.
 
+**A cut has to be findable.** The menu is computed over arcs and hinged on graph nodes, and
+it was published that way — "skip loop at 8". Node 8 appears nowhere else: not on the map,
+not in the itinerary, not in the CSV, and nothing lets a racer toggle it. It was also
+ambiguous, because a braided network passes the same junction more than once and only one of
+those passes is the decision. Cuts are now published as ranges of the itinerary's own
+numbered steps — *skip steps 49–56, Snakeroot → Gateway* — which is the one reference he has
+in his hand at hour four. `_group_arcs` takes a set of must-break arcs so every cut begins
+and ends on a step boundary; without it a loop could leave the route halfway through a
+merged leg and be unnameable, which is exactly what one cut on the 6.0 mph plan did.
+`check_adaptive` refuses to ship a range whose first step does not start at the cut's own
+hinge and whose last does not end there — a range off by one step would send him off-route at
+the wrong place while quoting a price for ground he is not skipping.
+
 Folded away below them is the older **pace sweep**, eleven itineraries from 1.0 (textbook
 Tobler) to 2.0. It answers a modelling question rather than a racing one: pace is the one
 parameter a racer can neither measure in advance nor control on the day, and sweeping it

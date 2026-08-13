@@ -421,6 +421,41 @@ function setStep(step) {
   highlightItinerary(currentStep);
 }
 
+// ── Adaptive cuts ──────────────────────────────────────────────────────────
+// Cuts are priced over arcs, but they are published against the itinerary's own step
+// numbers, because that is the only reference a racer has with him at hour four. The
+// exporter forces a step boundary at both ends of every cut and check_adaptive refuses to
+// ship a range that starts or ends anywhere but the junction the loop hinges on, so these
+// numbers name exactly the ground the price was computed from.
+function cutSteps(c) {
+  if (c.step_start == null || c.step_end == null) return null;
+  return c.step_start === c.step_end
+    ? `step ${c.step_start}`
+    : `steps ${c.step_start}–${c.step_end}`;
+}
+
+// Which trail you turn off, and which you are back on when the loop closes.
+function cutWhere(c) {
+  if (c.step_start == null) return null;
+  const from = PRESET.steps[c.step_start - 1], to = PRESET.steps[c.step_end - 1];
+  if (!from || !to) return null;
+  return from.name === to.name ? from.name : `${from.name} → ${to.name}`;
+}
+
+function cutTrailsLost(c) {
+  const byId = new Map((PRESET.trails || []).map(t => [t.trail_id, t.name]));
+  return (c.trail_ids_lost || []).map(id => byId.get(id) || `trail ${id}`);
+}
+
+// Hovering a cut lights up the steps it covers, so "skip steps 49–56" can be checked
+// against the itinerary without counting rows down the list.
+function markCut(from, to) {
+  document.querySelectorAll('.itin-step').forEach(row => {
+    const i = +row.dataset.step;
+    row.classList.toggle('in-cut', from != null && i >= from && i <= to);
+  });
+}
+
 function renderPresetInfo() {
   const t = PRESET.totals, solver = PRESET.solver || {};
   // Presets predating the optimality block fall back to the raw solver gap.
@@ -483,10 +518,21 @@ function renderPresetInfo() {
           const when = c.keep_before_s == null
             ? 'any time'
             : `past ${fmtClock(c.keep_before_s)}`;
-          return `<div class="info-row" title="Junction ${c.hinge}. Skipping this loop saves ` +
-            `${c.minutes_saved} min and ${c.miles_saved.toFixed(2)} scored miles.">` +
-            `<span>Skip loop at ${c.hinge}<span class="info-note"> — drop if ${esc(when)}</span></span>` +
-            `<span><b>−${c.points_lost.toFixed(1)}</b>` +
+          // Presets predating schema 5 have no step range; they fall back to naming the
+          // junction, which is all they carry.
+          const range = cutSteps(c), where = cutWhere(c), lost = cutTrailsLost(c);
+          const tip = (range ? range[0].toUpperCase() + range.slice(1) : `Junction ${c.hinge}`) +
+            `. Skipping this loop saves ${c.minutes_saved} min and ` +
+            `${c.miles_saved.toFixed(2)} scored miles` +
+            (lost.length ? `, and gives up ${lost.join(', ')}` : '') + '.';
+          const span = range ? ` data-cut-from="${c.step_start}" data-cut-to="${c.step_end}"` : '';
+          return `<div class="info-row cut-row"${span} title="${esc(tip)}">` +
+            `<span>Skip ${esc(range || `loop at ${c.hinge}`)}` +
+            (where ? `<span class="info-note"> ${esc(where)}</span>` : '') +
+            `<span class="info-note"> — drop if ${esc(when)}</span></span>` +
+            // Some loops are pure repeat mileage and cost nothing to skip. "−0.0" reads as
+            // a rounding artefact in a table whose whole job is to be trusted at mile 20.
+            `<span><b>${c.points_lost < 0.05 ? 'free' : `−${c.points_lost.toFixed(1)}`}</b>` +
             `<span class="info-note"> / ${c.minutes_saved}m</span></span></div>`;
         }).join('');
     }
@@ -520,7 +566,15 @@ function renderPresetInfo() {
         salv.map(s => {
           const by = s.decide_by_s == null ? '' :
             `<span class="info-note"> · commit by ${fmtClock(s.decide_by_s)}</span>`;
-          return `<div class="info-row"><span>${s.budget_h.toFixed(1)} h${by}</span>` +
+          // The row is only advice if it says what to actually do. Naming the steps turns
+          // "5.5 h scores 32.1" into an instruction he can carry out at the junction.
+          const skip = (s.cut_steps || []).map(([a, b]) => a === b ? `${a}` : `${a}–${b}`);
+          // Singular only for one cut covering one step; a single 40–43 is still steps.
+          const one = skip.length === 1 && !skip[0].includes('–');
+          const what = skip.length
+            ? `<span class="info-note"> · skip ${one ? 'step' : 'steps'} ` +
+              `${skip.join(', ')}</span>` : '';
+          return `<div class="info-row"><span>${s.budget_h.toFixed(1)} h${by}${what}</span>` +
             `<span><b>${fmtScore(s.score)}</b>` +
             `<span class="info-note"> · ${s.trails_completed} trails` +
             `${s.feasible ? '' : ' · not reachable'}</span></span></div>`;
@@ -550,6 +604,12 @@ function renderPresetInfo() {
       ? `<div class="caveat"><b>⚠ Not proven optimal</b><br>` +
         `${opt.caps_binding.map(esc).join('; ')}. ${esc(opt.note || '')}</div>`
       : '');
+
+  $('presetInfo').querySelectorAll('.cut-row[data-cut-from]').forEach(row => {
+    const from = +row.dataset.cutFrom, to = +row.dataset.cutTo;
+    row.addEventListener('mouseenter', () => markCut(from, to));
+    row.addEventListener('mouseleave', () => markCut(null, null));
+  });
 }
 
 // ── CSV download ───────────────────────────────────────────────────────────
@@ -635,15 +695,21 @@ function buildCsv() {
   if (adaptive && (adaptive.cuts || []).length) {
     extra.push('', 'IF YOU FALL BEHIND — cheapest to give up first');
     extra.push(csvRow(
-      'Junction', 'You reach it at', 'Drop if past', 'Minutes saved', 'Miles saved', 'Points lost'));
+      'Skip steps', 'Off at / back on', 'You reach it at', 'Drop if past',
+      'Minutes saved', 'Miles saved', 'Points lost', 'Trails given up'));
     for (const c of adaptive.cuts.slice().sort((a, b) => a.points_per_minute - b.points_per_minute)) {
+      const range = cutSteps(c);
       extra.push(csvRow(
-        c.hinge,
+        // Same numbers as the step column above, so the two halves of the printed sheet
+        // refer to each other. Older presets have only the junction to offer.
+        range ? range.replace(/^steps? /, '') : `junction ${c.hinge}`,
+        cutWhere(c) || '',
         c.reach_s == null ? '' : fmtClock(c.reach_s),
         c.keep_before_s == null ? 'any time' : fmtClock(c.keep_before_s),
         c.minutes_saved,
         c.miles_saved.toFixed(2),
         c.points_lost.toFixed(2),
+        cutTrailsLost(c).join('; '),
       ));
     }
   }
@@ -652,10 +718,12 @@ function buildCsv() {
     extra.push('', 'IF YOU ONLY HAVE (each row costed as a whole plan, not by summing cuts'
       + (after ? `; only cuts still ahead of you at ${(after.decide_after_s / 3600).toFixed(1)} h` : '')
       + ')');
-    extra.push(csvRow('Hours', 'Commit by', 'Score', 'Trails', 'Unique miles', 'Reachable'));
+    extra.push(csvRow(
+      'Hours', 'Skip steps', 'Commit by', 'Score', 'Trails', 'Unique miles', 'Reachable'));
     for (const s of adaptive.salvage) {
       extra.push(csvRow(
         s.budget_h.toFixed(1),
+        (s.cut_steps || []).map(([a, b]) => a === b ? `${a}` : `${a}–${b}`).join(', '),
         s.decide_by_s == null ? '' : fmtClock(s.decide_by_s),
         fmtScore(s.score), s.trails_completed,
         s.unique_miles.toFixed(2), s.feasible ? 'yes' : 'no',
