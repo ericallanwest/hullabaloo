@@ -795,6 +795,13 @@ const _BingLayer = L.TileLayer.extend({
   },
 });
 
+// CARTO put its raster basemaps behind an API key in 2026. An unkeyed tile
+// still loads, only with "API KEY REQUIRED" stamped across it, so the key
+// rides on every CARTO tile URL below. A static site has nowhere else to
+// keep it, so it is visible here by necessity.
+// Keys are issued at https://carto.com/basemaps/apikey/
+const CARTO_BASEMAP_KEY = 'cb1_2q3w_1_850ea6cb34eadf3aad7ff1da';
+
 // Order and default deliberately mirror the Smokies planner, so the two sites feel like
 // the same tool. The USGS layers are Hullabaloo's own and sit at the bottom.
 // ArcGIS REST tiles order the path {z}/{y}/{x}, not {z}/{x}/{y}.
@@ -803,9 +810,9 @@ const BASEMAPS = {
     { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors', maxZoom: 19, zIndex: 1, className: 'grayscale-layer' }),
   'OSM Color': L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
     { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors', maxZoom: 19, zIndex: 1 }),
-  'CartoDB Light': L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+  'CartoDB Light': L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png?key=' + CARTO_BASEMAP_KEY,
     { attribution: '&copy; OpenStreetMap contributors &copy; CARTO', maxZoom: 19, zIndex: 1 }),
-  'CartoDB Dark': L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+  'CartoDB Dark': L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=' + CARTO_BASEMAP_KEY,
     { attribution: '&copy; OpenStreetMap contributors &copy; CARTO', maxZoom: 19, zIndex: 1 }),
   'Google Maps': L.tileLayer('https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}',
     { attribution: '&copy; Google', maxZoom: 20, zIndex: 1 }),
